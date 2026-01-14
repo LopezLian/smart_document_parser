@@ -1,943 +1,716 @@
---- PAGE 1 (ROBUST PIPELINE) ---
+--- PAGE 1 (FAST LANE) ---
 
-[DIAGRAM 0]
+Reinforcement Learning-Augmented LLM Agents for
+Collaborative Decision Making and Performance
+Optimization
 
-rr
+Dong Qiu!*, Duo Xu”*, Limengxi Yue*>
+'New England College, Henniker, NH 03242, USA
+?Northeastern University, San Jose, CA 95113, USA
+3 University of Massachusetts Amherst, Amherst, MA 01003, USA
+*DQiu_GPS@nec.edu, *xu.duo3@northeastern.edu, 'limengxiyue@outlook.com
 
+Abstract—Large Language Models (LLMs) perform well in
+language tasks but often lack collaborative awareness and struggle
+to optimize global performance in multi-agent settings. We present
+a reinforcement learning—augmented LLM agent framework that
+formulates cooperation as a decentralized partially observable
+Markov decision process (Dec-POMDP) and adopts centralized
+training with decentralized execution (CTDE). We introduce
+Group Relative Policy Optimization (GRPO) to jointly optimize
+agent policies with access to global signals during training,
+together with a simplified joint reward that balances task quality,
+speed, and coordination cost. On collaborative writing and coding
+benchmarks, our framework delivers a 3x increase in task
+processing speed over single-agent baselines, 98.7%
+structural/style consistency in writing, and 74.6% test pass rate in
+coding. The approach consistently outperforms strong multi-agent
+LLM baselines and provides a practical path toward reliable
+collaboration in complex workflows.
 
-[DIAGRAM 2]
+Keywords—multi-agent systems; reinforcement learning; large
+language models; Dec-POMDP; CTDE; policy optimization.
 
-THE CALCUTTA LAW JOURNAL. , [VoL. 91.
+I. INTRODUCTION
 
-. _ ORIGINAL CIVIL. -
+Large language models (LLMs) are increasingly used as
+agents that can plan, write code, call tools, and review
+intermediate outputs. In many practical tasks—such as iterative
+problem solving, collaborative content production, and
+software-oriented workflows—effective performance depends
+on coordinated behaviors among multiple specialized agents
+rather than a single monolithic model. This naturally aligns with
+a decentralized partially observable Markov decision process
+(Dec-POMDP), where each agent observes only part of the state
+and the team must act to optimize a shared objective.
 
-Before Mr. Justice R. 8. Bachawat. : °
-IN THE GOODS OF
-. ATUL KRISHNA MAJUMDAR
-- DECEASED.
+Multi-agent reinforcement learning (MARL) offers a
+principled way to learn coordination policies, but it also
+introduces persistent challenges, including non-stationary
+learning dynamics, credit assignment ambiguity, and sensitivity
+to evaluation protocols. A large-scale benchmarking study
+highlights that reported gains can vary substantially with
+implementation details and experimental settings, making
+careful, reproducible comparisons essential when claiming
+improvements in cooperative MARL [1]. These concerns are
+especially relevant for LLM-based agent teams because actions
+are open-ended (language decisions and tool calls), feedback
+can be sparse or delayed, and success criteria are often defined
 
-Probate—Non-conicntious proccedings—Recacation of grant, grounds of—
-Material defects in procecdings—Circumstances that bar application for
-revocation. : :
+by external evaluators (tests, metrics, or human-like preference
+signals).
 
-Proof in common form—Bearing of Sections 275-283 of the Indian Succession
-Act 1925 and Section 68 of the Indian Evidence Act—Non-citation of a
-person entitled to be cited, if a sufficient- ground for revocation of grant
-‘Effect of non-citation, summary revocation or further proof in solemn
-form, , :
+Among policy-gradient methods, Proximal Policy
+Optimization (PPO) remains a widely adopted baseline due to
+its empirical stability and straightforward implementation [2].
+Notably, PPO has been shown to perform strongly in
+cooperative multi-agent games when pipelines and baselines are
+controlled, indicating that stable on-policy optimization can be
+competitive even in multi-agent settings [3]. Trust-region style
+ideas have also been investigated for MARL to reduce
+destructive updates and improve learning robustness under
+changing joint policies. However, applying PPO-style
+optimization to LLM agent collaboration is not a direct
+translation: agent interactions are structured as multi-step
+dialogues and tool-mediated actions, and the training signal
+must reflect team-level outcomes while still allowing agents to
+execute with their own local information.
 
-Absence of an affidavit of an attesting witness to support a petition for
-grant of Probate docs not make the procecdings defective in substance pro-
-vided the petition is otherwise in accordance with the provisions of Sections
-275-283 of the Indian Succession Act 1925.
+A common strategy for cooperative MARL is centralized
+training with decentralized execution (CTDE), where a
+centralized learner can use global information during training,
+but agents act using local observations at deployment. Value
+factorization approaches such as QMIX decompose the team
+value function into agent-wise utilities with a monotonic mixing
+constraint, enabling scalable learning in cooperative
+environments [4]. Counterfactual credit assignment,
+exemplified by COMA, improves attribution by comparing an
+agent’s chosen action to counterfactual alternatives given the
+same joint context [5]. Centralized-critic actor—critic methods
+such as MADDPG further stabilize learning by training critics
+with joint observations/actions while retaining decentralized
+policies for execution [6]. These ideas are well established for
+structured action spaces, but for LLM agent teams they must be
+adapted to language-and-tool action trajectories and to
+evaluator-defined feedback.
 
-Provisions of Scction 68 of the Indian Evidence Act are not exhaustive.
-Under the Succession Act and the Rules of this High Court, declaration and
-verification of the exccutor and an attesting witness is sufficient proof of the
-Will, and the Court has the power to grant probate in non-contentious pro-
-ceedings though there be no affidavit from the executor or the attesting
-witnesses. : . ;
-
-Proof of non-citation of «a person who ought to have been cited makes
-the proceedings defective in substance but it is not in itself sufficient for
-summary revocation of the probate granted ex-parte. The Court ought to
-give the grantee an opportunity to prove the will in solemn form, and after
-hearing evidence and objections, decide whether the order granting probate
-should stand or whether it should be revoked. Proof of non-citation thus
-converts a non-contentious proceedings into a defended action for proof in
-solemn form.
-
-Mere delay and acquiescence under circumstances not amounting to
-waiver or estoppel does not bar the right of a person adverscly affected to
-apply for revocation of grant of probate in non-contcntious proceedings, and
-the onus of establishing such cstoppel or waiver is on the grantee.
-
-Petition by Sm. Sudhalata Ghose for revoking the grant of
-probate of will of her father, Atul Krishna Majumdar and if
-necessary, for an order directing the executors to prove the wil}
-jn solemn form, . ,
-
-“ .
-
-
-[VoL
-
-
-Civin,
-—-.
-1953-
-
-wre}
-January, £2.
-
-
-[DIAGRAM 6]
-
-[DIAGRAM 7]
-
-[DIAGRAM 8]
-
-[DIAGRAM 9]
-
-[DIAGRAM 10]
-
-[DIAGRAM 11]
-
-[DIAGRAM 12]
-
-ne
-
-
+In parallel, LLM-based multi-agent frameworks have
+emerged that coordinate agents via conversational protocols and
+role separation [7]. AutoGen demonstrates how multi-agent
+conversation combined with tool use can support complex
+multi-step tasks in practical applications [8],[9]. MetaGPT
+organizes multiple roles in a software-style workflow to
+produce artifacts through structured collaboration [10].
+AgentBench provides benchmarks and evaluation setups to
+assess whether LLMs can act as agents in interactive
 
 ==================================================
---- PAGE 2 (ROBUST PIPELINE) ---
+--- PAGE 2 (FAST LANE) ---
 
-[DIAGRAM 0]
+environments, encouraging more systematic measurement
+beyond anecdotal demonstrations [11]. While these systems are
+effective in many cases, they are often driven primarily by
+prompting heuristics and fixed coordination rules, with limited
+use of a unified learning signal that directly optimizes long-
+horizon team performance under partial observability [12].
 
+Motivated by these gaps, we develop a reinforcement-
+learning-augmented framework for collaborative LLM agents
+that connects (i) a Dec-POMDP formulation of team interaction,
+(ii) a CTDE-style centralized trainer, and (ili) a shared
+experience buffer that stores trajectories and evaluator feedback
+for policy improvement. Our design emphasizes evaluator-
+driven learning: global metrics and critique signals are
+converted into training targets that improve the overall team
+behavior, while each agent retains its own execution pathway at
+inference time. This connects established MARL principles—
+robust baselines, stable policy optimization, and careful
+evaluation practice—to the emerging practice of role-based
+LLM agent collaboration.
+
+Il. METHODOLOGY
+
+A. Problem Formulation — Dec-POMDP View of LLM Teams
+
+We cast a team of LLM agents as a cooperative decision
+process under partial observability where each role—planner,
+writer, reviewer, coder, tester—must act on a limited, noisy
+view of the task while pursuing a shared objective and the
+structure is shown in Fig.1. In practice this means we separate
+what is globally relevant from what should remain local. The
+shared part includes the task brief, accepted snippets, approved
+facts from retrieval, and a compact changelog; the private part
+includes role-specific scratchpads, TODO lists, and short-term
+hypotheses that may be wrong and should not pollute the global
+context. Actions are not raw chat turns but a small set of
+structured primitives such as “plan,” “draft section,” “integrate,”
+“lint,” “unit-test,” “repair,” and “finalize,” each with explicit
+pre- and post-conditions. Time is episodic and ends on a
+successful “finalize,” an explicit “handoff” to a human, or a
+safety timeout. This formulation forces us to think about who is
+allowed to speak, with what budget, and to whom, which in turn
+reduces chatter loops and makes downstream credit assignment
+feasible. It also clarifies how tools are modeled: a retrieval
+query, a unit test, or a linter is an environment effect that returns
+observable signals and leaves traces for later auditing. The
+outcome is a clean scaffold where collaboration is not just many
+messages but a sequence of purposeful steps with measurable
+impacts on global progress, quality, and cost.
+
+System Identification
+and Linearization
+
+System Identification
+and Linearization
+
+Sending-End Physical
+
+System
+Wideband Analysis
+
+and Demand Calculation
+
+Device Control
+and Allocation
+
+(operational data) Resource Mapping
+
+and Allocation
+
+(Hreq, D ;, req)
+
+control signal
+
+Fig. 1. RL-Augmented LLM Team (CTDE + GRPO)
+
+B. Centralized Training, Decentralized Execution — Why
+CTDE Fits LLM Workflows
+
+Centralized training with decentralized execution is a
+natural fit for language agents because the expensive part—
+learning how to coordinate—benefits from seeing everything,
+while the runtime part must stay lean and privacy-aware.
+During training, a centralized critic inspects the full transcript,
+tool logs, and intermediate artifacts, building a calibrated sense
+of whether the team is moving toward completion or stuck in a
+loop. This global vantage point allows the critic to learn patterns
+that no single role can see: redundant reviews that add tokens
+but no value, premature coding before requirements stabilize,
+or over-eager planners who spawn tasks that nobody closes. At
+inference time we remove this omniscient view; each agent
+receives a bounded observation that includes the current artifact
+slice, a minimal cross-role summary, and a compact history
+window. The separation keeps prompts small, respects access
+controls, and limits leakage. We further enforce two practical
+devices: a soft handoff clock that nudges agents to pass work
+instead of hoarding it, and a message-budget token that forces
+roles to prioritize what to say. Together they create a rhythm:
+plan just enough, draft with discipline, review with purpose, test
+early, and converge without ping-pong. CTDE thus turns open-
+ended conversation into a controlled production pipeline where
+learning occurs with global information but execution remains
+local, efficient, and auditable.
+
+C. Group Relative Policy Optimization — Stable Credit for
+Teams
+
+We extend standard policy optimization with a group-
+relative baseline designed for teams. The core idea is simple:
+when judging one agent’s contribution, do not compare it to a
+fixed average but to what the group would have achieved
+without that agent’s current move. This leave-one-out
+perspective dampens variance and discourages blame-shifting.
+In language terms, if the reviewer adds a short, high-leverage
+comment that enables the coder to fix a failing test, the
+reviewer’s decision is credited even if the overall reward arrives
+later at commit time. Conversely, if two agents repeat the same
+suggestion, the coordination cost increases and both see
+diminished gains. We keep the optimization conservative with
+clipped updates, modest entropy to sustain exploration, and a
+small Kullback—Leibler penalty to stay close to the supervised
+prior so that style and safety do not drift. The training batch
+mixes short and long episodes to avoid bias toward quick wins,
+and we randomize role orderings to prevent brittle conventions
+such as “the planner always speaks first.” Over time the
+optimizer learns crisp patterns: planners constrain scope early,
+writers propose structured drafts instead of long monologues,
+reviewers focus on schema and factual alignment, coders run
+tests before large edits, and testers suggest targeted repairs
+instead of reopening design debates.
+
+D. Joint Reward Design — Compact, Normalized, and
+Actionable
+
+A practical reward must be easy to compute, robust to noise,
+and aligned with operator goals. We therefore combine four
+signals. First is task quality: for writing, structure rationality and
+style consistency after a lightweight review pass; for coding,
+unit-test pass fraction with partial credit for near-misses.
+
+==================================================
+--- PAGE 3 (FAST LANE) ---
+
+Second is speed: wall-clock improvements normalized within a
+batch so teams that move faster under comparable conditions
+receive higher credit without incentivizing reckless shortcuts.
+Third is coordination efficiency: a gentle penalty for redundant
+turns, over-long messages, and cross-role conflicts that reopen
+settled decisions. Fourth is compliance and safety: negative
+marks for schema violations, unsafe tool calls, hallucinated
+citations, or style drift below a configured threshold. Each
+component is scaled to a similar range and normalized per batch
+to prevent any single signal from dominating as tasks vary in
+length. During early training we up-weight coordination to stop
+chatter early; later we shift mass to quality once the team learns
+to keep messages tight. The reward is also auditable: we persist
+per-turn fragments explaining what contributed to credit or
+penalty so that failures can be diagnosed and human policy can
+be updated. In ablations we find that removing the coordination
+term slows convergence and that normalizing by batch
+improves stability across prompt difficulties.
+
+E. Observation and Action Primitives — Small Interfaces, Big
+Effects
+
+The observation design aims to be compact yet sufficient.
+Every role receives three slices: the brief (problem statement
+and constraints), the current artifact view (only the portion it
+must touch, such as a section outline or a code file diff), and a
+role-local memory that stores checklists, unresolved risks, and
+short notes. Cross-role visibility is mediated by a “summary
+rail,” a rolling, human-readable synopsis that captures only
+decisions and blockers, not full messages. This rail keeps
+everyone aligned without inflating token budgets. On the action
+side, we intentionally restrict the verb set. “Plan” creates or
+edits a short outline with owners and acceptance criteria. “Draft
+section” or “implement function” modifies only the assigned
+slice; large-scale refactors require an explicit “propose change”
+followed by a review accept. “Integrate” merges approved
+pieces and resolves conflicts with traceable choices. “Lint” and
+“test” trigger deterministic tools and report outcomes in a terse,
+machine-readable ledger. “Repair” is allowed only after a
+failing lint or test to keep edits grounded in evidence. “Finalize”
+produces a complete artifact with a conformance checklist.
+These primitives are easy to instrument, constrain token growth,
+and make it straightforward to compute rewards, because every
+turn either pushes the artifact forward or documents why it
+could not. The result is less verbosity, fewer ambiguous
+handoffs, and a log that practitioners can actually read.
+
+F. Implementation Details — Practical Training Loop and
+Systems Notes
+
+We build policies from instruction-tuned backbones with
+lightweight adapters for role conditioning so that a single base
+model can serve multiple roles without duplicating parameters.
+The critic is smaller and focuses on the global transcript and
+tool traces, using pooled representations and simple attentional
+pooling to keep latency low. Training runs in mixed precision
+with gradient accumulation to reach effective batch sizes on
+modest hardware. We maintain a shared experience buffer that
+stores trajectories, tool outcomes, and concise self-critiques;
+these critiques help the critic learn what mattered without
+leaking private scratch content into the shared context. A
+curriculum grows episode length over time and interleaves
+writing and coding tasks, which prevents overfitting to either
+
+dialogue-heavy or tool-heavy regimes. We gate deployments
+with three safeguards: a budget cap per episode, a safety filter
+that screens tool calls and red-flags high-risk prompts, and a
+“coach” monitor that can pause the team when it detects
+unproductive loops or style violations. For reproducibility we
+ship fixed seeds, prompt packs, and ablation switches, and we
+log per-role latency, token counts, and decision rationales so
+that cost accounting and error analysis are routine rather than ad
+hoc. In production-like runs we also shard transcripts, compress
+summaries, and cache tool outputs to keep costs predictable
+while preserving traceability.
+
+III. EXPERIMENT
+
+A. Benchmarks and Tasks — What We Measure and Why
+
+We evaluate the framework on two complementary
+collaborative task families that jointly probe knowledge
+generation and verifiable execution. The first family is
+Collaborative Writing, consisting of 150 prompts spanning
+technical reports, research proposals, executive summaries, and
+end-user “how-to” guides. Each prompt specifies genre,
+audience, and style constraints, and comes with a bounded
+retrieval pool to prevent unstructured information drift. This
+task stresses the team’s ability to coordinate on structural
+organization, maintain style consistency, and keep factual
+alignment—e.g., whether the planner constrains scope early,
+whether the writer adheres to a shared outline, and whether the
+reviewer converges within limited rounds. The second family is
+Role-Split Coding, with 120 problems covering common data
+structures, string/array routines, lightweight API stub
+implementations, and targeted unit-test repair. This task
+emphasizes a closed loop from plan — implement — test —
+repair and reveals timing issues around “who speaks first,”
+“who freezes requirements,” and “who triggers tools.” For both
+families we define strict termination conditions (cither a
+passing outcome or a timeout) and preserve a full audit trail
+(per-turn action, tool receipts, and a succinct human-readable
+summary), enabling reproducible measurement of speed,
+quality, and coordination efficiency.
+
+B. Metrics and Protocols — Throughput,
+Coordination
+
+Quality, and
+
+Our metric suite unifies throughput, quality, and cost.
+Throughput is normalized as processing speed (x) relative to
+a Single-LLM baseline; we also log message turns and total
+tokens as coordination costs. Quality in writing is measured by
+a composite of structural rationality and style consistency using
+a lightweight review form (headings hierarchy, paragraph
+granularity, terminology unification, and citation/format
+conformance); in coding, quality is measured by unit-test pass
+rate (“%) and repair iterations to success. Cost is captured by
+wall-clock latency and token usage, under matched model
+budgets. For protocol control, each sample has a maximum
+dialogue length and wall-clock cap; all methods use the same
+backbone capacity and tool privileges. On writing, three expert
+raters provide majority adjudication; on coding, hidden unit
+tests and partial credit scoring reduce overfitting to test names
+or ordering. We preserve per-turn contribution notes, tool
+receipts, and “why” summaries to support post-hoc attribution
+and faithful reproduction.
+
+==================================================
+--- PAGE 4 (FAST LANE) ---
+
+C. Baselines and Controls — What We Compare Against
+
+We compare three primary systems: Single LLM (one
+model executes plan and implementation end-to-end),
+AutoGen Team (two conversational agents with tools), and
+Proposed (GRPO). To avoid confounds from capacity and call
+frequency, we hold the backbone size constant, cap concurrent
+tool calls, and enforce equal budget (calls and maximum
+
+100 94.2
+
+80
+
+60
+
+Value
+
+Single LLM AutoGen Team
+
+Fig. 2. Comparison Across Methods on Collaborative Tasks_
+
+context) across methods. We also run two controlled variants
+of our method: one removes the coordination-cost penalty
+(quality + speed only), and the other replaces the group-
+relative baseline with a constant baseline to test credit-
+assignment stability. Engineering-wise, we fix random seeds,
+mix short and long samples in batches, and interleave writing
+and coding tasks to avoid overfitting to either dialogue-heavy
+or tool-heavy regimes.
+
+mmm Processing Speed (x)
+@@l_ Writing Score (%)
+™@™™ Coding Pass Rate (%)
+
+Proposed (GRPO)
+
+Fig. 2. Comparison Across Methods on Collaborative Tasks
+
+Score / Pass Rate (%)
+
+70} i
+
+50
+
+—— Writing Quality — Proposed {GRPO)
+Writing Quality — AutoGen Team
+
+— Coding Pass Rate — Proposed (GRPO)
+Coding Pass Rate — AutoGen Team
+
+125 150 75 200
+
+5 (x1073)
+
+Fig. 3. Learning Curves on Writing and Coding Benchmarks
+
+D. Main Results — Team-Level Gains without Token Bloat
+
+The headline outcomes appear in Table I and Fig. 2. Under
+matched budgets, Proposed (GRPO) achieves 98.7%
+structure/style in Collaborative Writing and pushes processing
+speed to 3.0x; in Role-Split Coding, the unit-test pass rate
+reaches 74.6%, outperforming both Single LLM and AutoGen
+Team. Crucially, the improvements do not come from “talking
+more.” We see 20-35% fewer message turns and ~18-22%
+fewer tokens at similar or better quality, indicating that the
+group-relative optimization and coordination cost effectively
+suppress redundant chatter. The Paretod data is shown in
+table II and plot in Fig. 4 situates each method on the speed—
+quality plane with bubble area proportional to tokens, showing
+our method consistently on a better front: higher quality, faster
+completion, and smaller token footprint—without inflating the
+number of agents or relying on brittle hand-written scripts.
+
+Fig. 4. Speed and Quality Across Methods (Line Chart; tokens an ated)
+
+not
+s: 0.78
+3.00
+
+—*— Processing Speed (x)
+—*— Writing Structure/Style (%)
+2.50
+
+N
+N
 a
-
-
-[DIAGRAM 2]
-
-VoL. 91.] . oe HIGH COURT. © :
-
-: , - . .
-
-_ The material facts of the case will appear -from the judg-_
-ment, : . ‘
-
-A, G. Mitra for the Petitioner. - So, J
-
-Sankar Banerjee and Subimal Roy for the Respondents.
-
--The judgment of the Court was as follows: — *
-
-Bachawat, J.t—This matter raises interesting. questions of
-probate practice. This ‘is a petition by Sreemati Sudhalata
-Ghose for’revoking the grant of probate of will ‘of her father
-Atul Krishna Majumdar and, if necessary, for an order directing
-the executors ‘to prove the will in solemn form.
-
-Atul Krishna died on the 12th September, 1947. He left
-behind him surviving his. widow Harimati, two daughters,
-Sudhalata and Santilata, two grand daughters by a pre-deceased “
-son and several grand children by Santilata and a.predeceased
-daughter Snehalata.. One Satish Chandra Majumdar, Nirode
-Chandra Majumdar, Kanai Lal. Choudhury and Charu Chandra
-Choudhury as executors presented to this Court a petition for
-grant of probate of the will on the 22nd December, 1947. The
-order for grant of probate was made on the 22nd January,1948
-wthout issuing any. special citation. Later Satish and Nerode
-renounced the executorship. In 1952 Harifati instituted a suit
-for administration of the estate of the deceased against Kanai
-and Gharu as executors. .
-
-* Tam called. upon to decide on affidavits the following pre-
-liminary points:
-
-. (1) Has the petitioner locus standi to maintain this appll-
-
-cation? _ -— ;
-- (2) Is she in the circumstances of this case debarred from .
-
-. making the application? , a
-. (3) Was'the proceeding for the grant of probate defective.
-
-- in’ substance, because (a) the~petition for grant
-
-. Was not supported by-an affidavit of an attesting
-
-
-any
-wont
-v
-
-
-Civ.
-, 3953-
-—
-‘In the goods of
-Atul Krishna
-. Majumdar
-deceased.
-oo
-January, 12.
-
-
-[DIAGRAM 6]
-
-[DIAGRAM 7]
-
-x
-
-
-[DIAGRAM 9]
-
-ee
-
-
-
-==================================================
---- PAGE 3 (ROBUST PIPELINE) ---
-
-[DIAGRAM 0]
-
-226
-
-
-THE ALCUTTA LAW, JOURNAL. / (VoL. 91.
-witness (b) the petition did not disclose the names
-
-. _ of the persons upon.whom the estate would have
-
-devolved on intestacy and (c) no special citation
-
-f . _was issued: to the petitioner. .
-
-. (4) If so, is the petitioner . entitled to revocation as a.
-
-‘ matter of course without further investigation?
-
-The petitioner is a childless married daughter of Atul
-‘Krishna. It is said that she is barren and, having regard to her
-
-. age, is not likely to have a male issuc. “The evidence establishes
-that her husband is willing to adopt a son and is not incapable
-of doing so. She, therefore, has the possibility of getting a son
-and for purposes of succession ‘to the estate of Atul Krishna
-under the Dayabhaga law ranks on the-same footing as Santilata
-who is a married daughter having a male issue: Umakanta
-Bhattacharjya v. Bed Bati Debi’ (1): In case of intestacy of
-of Atul Krishna the petitioner and Santilata are both entitled to
-
-” succeed to his estate after the death of his widow. She is, there-
-fore, a presumptive reversioner and as such is entitled to main-
-tain this application. , .
-
-. It is contended that the petitioner is set up by Harimati
-who having instituted the suit for administration is now debarred
-from applying for revocation of the grant. If the petitioner has
-an independent right of her own to apply to revocation of the
-grant of probate, that right is not lost because she is acting in
-concert with some other person or because she has been set up
-by the other: Shrooshi.Bala v. Anandamoyee (2). 7
-
-} It is next contended that the petitioner is barred by delay
-and acquiescence. The onus of establishing such delay and
-‘acquiescence as will bar the petitioner is upon the respondent
-
-_ executors: Shyama Charan Baisya v. Profulla Sundari Gupta (3).
-Where the proceedings for grant of probate are contentious, any
-person who is cognisant of such proceedings and who chooses
-to stand by, allowing others to fight the battle is deemed privy
-to the ‘proceedings and is not entitled: to reagitate the matter:
-O. V’. Forbes v. V. G., Peterson (4). Thé proceedings here were
-
-+ non-contentious. The effect of delay and acquiescence in grants
-
-Q) figge] T-L-R.7i Cale.“a99. (2), (1906) 12° C.W.N, 6. ' .
-(3)- (1914-15) 19. C.W.N. 882. 5 (4) (1940-41) 45 CAW.N. 780 (745).
-
-
-Civit.
-1953-
-tent
-‘In the goods of
-Atul Krishna
-Majagndar _
-- deceased. .
-Bachawat, Jj.
-
-
-[DIAGRAM 4]
-
-[DIAGRAM 5]
-
-[DIAGRAM 6]
-
-[DIAGRAM 7]
-
-ww
-
-
-[DIAGRAM 9]
-
-x
-
-
-
-==================================================
---- PAGE 4 (ROBUST PIPELINE) ---
-
-[DIAGRAM 0]
-
-[DIAGRAM 1]
-
-VoL. 91] . ; , HIGH COURT.
-in “Common Form” on-the Tight of the petitidner to put the
-executors to proof of the will iri solemn form under the English
-practice is thus stated in Tristrain and Coote’s Probate Practice,
-(1gth Edition 7. 462):—
-“Any party whose interest is adversely affected by .a
-probate granted in common form may call it in by citation
-and put ‘the party who obtained it, or his representative,
-to prove the will in solemn form, and this right is not affect-
-ed by mere lapse of time, by acquiescence, or by the receipt
-of legacies under the will.” . pe
-Mere’ delay and acquiescence under circumstances not
-amounting to waiver or estoppel does not bar the right of a
-person adversely affected to apply for revocation of’ grant of
-probate in non-contentious proceedings: Aswini K. Chakravarty
-v. Sukhahavan Chakravarty, (1). Estoppel, or waiver of the
-right with full knowledge of material facts must be established.
-.In this case waiver and estoppel are not pleaded. It is not.
-alleged’ that the petitioner was cognizant of the non-contentious
-proceedings during’ the short period, while it was in progress.
-It is alleged that the will was read out by one Birendra Nath
-Mitra while the applicant was present and that it was then
-arranged that the papers would be placed in the hands of a
-certain solicitor for taking out probate. - Particulars of the time
-and place and of the parties to this arrangement are not
-mentioned. No-affidavit from ‘Birendra Nath Mitra has been
-produced. There is no distinct averment that the petitioner
-knew of the grant after it was made. ,
-"In my view the respondents have not established that the
-petitioner is debarred from’ making this application for revo-
-cation. .- . 2 . .
-The next point is whether the proceedings were defective
-in substance because .no affidavit from an attesting witness was
-filed when the grant for probate was made.. The petition for
-grants was in the farm_prescribed by section 276 of the Indian
-Succession Act, 1925." It states that.the writing annexed is the
-last will- and testament of Atul Krishna and that it was’ duly
-- (1) (1930) 95 C.W.N, 568. ~ ,
-
-
-227
-
-
-Cin
-1953)
-. a ,
-In the goods of
-Atul “Rrishna
-Majumdar
-decexstc>
-Bachawat, J.
-
-
-7
-
-
-[DIAGRAM 6]
-
-[DIAGRAM 7]
-
-[DIAGRAM 8]
-
-
-==================================================
---- PAGE 5 (ROBUST PIPELINE) ---
-
-LJ
-
-
-e
-
-
-228
-
-
-28 THE CALCUTTA LAW JOURNAL. _ (Vor. gi.
-CIVIL. executed. It giyes all the particulars required by sections 276
-1058. . and 279 Of the Act. It annexes a translation as required by
-—~ . Section 277. -It is signed.and verified by the petitioner as re-
-
-In the goods of quired by section 280 and is verified by one of the attesting’ wit-
-
-Atul Krishna nesses as required by section 281 of the Act. It ‘is -still said
-Majomear that the court could ‘not grant probate on these materials,
-~~~ _ because there was no sufficient proof of the execution of the will.
-
-Bachawat, J. *I think that the Court. had the power to grant probate on the
-
-oo materials before it. This power is conferred by the Succession
-
-, — Act. Section 275 of the Act says: —
-oe - . “The application far probate if made and verified in
-the manner hereinafter provided, shall be conclusive for the
-
-. purpose of authorising the grant of probate °° * °”
-
-' The petition in this case was in proper form and. was made
-
-. + * and verified in the manner provided in the Act. By section 275
-
-. of the Act a petition so made and verified is sufficient authority
-, for the grant. It is conclusive for authorizing the grant. - It is
-not conclusive for other purposes. But certain statement in the
-petition are given special effect for the Section goes on: —
-“* * * and no such grant shall be impeached by
-reason only that the testator * * * ‘had no fixed place
-- of abode or no property within the district at the time of
-oO - his death unless by a proceeding to revoke the grant by a
-fraud upon the Court.” me
-. +. ‘tees --Phe Court had.the power to call for further proof under
-. section 283 of*the Act. But this was a matter of discretion.
-. The Court had jurisdiction to make the grant without calling
-. ‘for further proof. Probate was granted under section 289 as it
-o, "appeared to the Court that the same should be granted.
-The relevant provisions of law are,contained in Sections
-- 275, 276,.277, 279, 280, 281, 282, 283 and 289 of the Indian
-Succession. Act, 1925. These sections correspond to’ sections
-243, 244,°245, 246, 247, 248, 249, 250 and 254 of the Indian
--  , +a° Succession Act X of 1865 and to sections 61, 62, 63, 65, 66, 67,
-68, 69 and.76 of the. Probate and Administration Act (V of 1881),
-, ‘with regard tothe point ir issue, there is no material difference
-; | __ ~in the provisions of the several Acts. 7 ;
-
-
-[DIAGRAM 4]
-
-[DIAGRAM 5]
-
-
-==================================================
---- PAGE 6 (ROBUST PIPELINE) ---
-
-[DIAGRAM 0]
-
-[DIAGRAM 1]
-
-[DIAGRAM 2]
-
-[DIAGRAM 3]
-
-Vou. 91.) * oo HIGH COURT. .
-. . ~ .
-Neither the Indian succession Act 1865 nor the Probate and
-Administration Act 1882 nor the Indian Succession Act 1925
-require an affidavit from executor and an atiesting witness before
-grant of probate in non-contentious proceedings. They do not
-even require the exccutor’s oath. Due execution of the will is
-‘proved under these Acts by simple verification and declaration.
-Belchambers Rules and Orders 1900 page 3i9: Kinney Probate
-and Administration Act, and Edition page ‘110. ——
-. Our rules and practicé with regard to proof in non-
-contentious grants have varied from time to time. .
-~The practices of the Diocese of London. and ecclesiastical
-rules were followed in the matter of granting probates by the
-Supreme Court in its ecclesiastical jurisdiction under clause 22
-of the Supreme Court Charter 14 Geo.-III of 1774.
-
-‘These practices and rules ceased to have effect on the pass-
-ing of the Succession Act X of 1865 and in consequence of rule
-65 made by this court under the Letters Patent of 1865. But
-even thereafter they were to some extent referred to in matters
-otherwise unprovided for. — ;
-
--. Rule 740 of Belchambers Rules and Orders passed under the
-Letters Patent of 1865 required an affidavit from an executor in
-support of a petition for probate in common form of a written
-and perfect will written or subscribed by the testator’s own hand
-and such other proof, if any, as. the. court might require.. By
-rule 756, the application for probate and swearing in ‘the
-executor was done by the same motion. The executor had to
-take oath. The corresponding English Practice may be found in
-Tristrant & Coote’s Probate Practice, 19th Edition, pages 86 and
-1140. - 0s , . ‘ H
-
-_ Where there was no proper attestation clause our-court used
-to-require an affidavit of due execution of the will from one of.
-the attesting witnesses if alive and available: Henderson's Law
-of Succession 3rd. Edition page 312; Kinney Probate .and Ad-
-ministration Act, 2nd Edition pages 116-19, and the unreported
-cases collected therein. This practfce is borrowed from the
-English Probate Practice, which is embodiedin Rule 4 of the
-
-
-, oe
+°
 a
-ase
-
-
-Civit.
-»-1953- ’
-—~
-In the"goods of '
-Atul Krishna
-Majumdar
-deceased.
-Bachawat, J.
-
-
-[DIAGRAM 7]
-
-[DIAGRAM 8]
-
-[DIAGRAM 9]
-
-[DIAGRAM 10]
-
-[DIAGRAM 11]
-
-[DIAGRAM 12]
-
-
-==================================================
---- PAGE 7 (ROBUST PIPELINE) ---
-
-9
-
-
-[DIAGRAM 1]
-
-THE CALCUTTA LAW JOURNAL. : (VoL. 91.
-‘ . ‘
-Principal Registry Rules and Rule 7 of the District Registry
-Rules. See,. Tristram & Coote’s Probate Practice, 19th Edition
-pages 32 and 930. ” 7 _
-
-Under our practice apparently the facts not appearing in 7
-the defective attestation clause could be supplied by a simple
-declaration of the attesting witness: In the Goods of Phul-
-kumari Dassi decided by Norris, J. on May 27, 1899 and noted
-in Kinney’s Probate & Administration Act, and Edition, page 118.
-
-Prima facie proof of the will was sufficient to warrant the
-grant in common form [In Re: Nobodoorga (1)] for persons
-interested and adversely affected by the grant had always the
-right,to put the executor to proof in solemn form to have the
-grant revoked for just cause. .
-Rules 740 and 735 are no longer in force. The existing
-rules passed in 1914 do not require an oath or affidavit from the
-executor. Under rule 33 of Ch. XXXV the English practice
-may be followed in matters not provided for by the Succession
-Act, the Rules and the Code, so far as applicable and not in*
-“consistent with the latter. .
-
-Under the Succession Act and the existing Rules, the de-
-
-' claration and ‘verification of the executor and an attesting wit-
-“ness is sufficient proof of thé Will. Following the English prac-
-tise and. our previous practice this court has called for further
-proof of due execution of the Will where there is no proper
-“attestation clause. 7
-In the goods of Edwin Carlow Marcelline deceased
-(2), decided’ in August 1951, my brother ‘Sinha, J. called~
-for an affidayit from an attesting witness. It docs not
-appear that the attestation clause of the Will was defective. _
-Sinha, ]. of course, had always the power to call for further —
-proof. . It is said, however, that the effect of that decision is that
-- the Court has no power to grant the probate without an affidavit
--from an attesting witness. Sinha, J. referred to Section 68 of the
-Indian Evidence Act, by virtue of which a will cannot be used
-(1) (1880) 7 GeR. 987. | (2) (1951) 56 C.W.N. 650. -
-
-
-. Civin. :
-’ 1953-
-ow,
-
-In the goods of
-_Atul Krishna
-Majumdar
-deceased.
-Bachawat, J.
-
-
-[DIAGRAM 4]
-
-[DIAGRAM 5]
-
-[DIAGRAM 6]
-
-[DIAGRAM 7]
-
-
-==================================================
---- PAGE 8 (ROBUST PIPELINE) ---
-
-[DIAGRAM 0]
-
-[DIAGRAM 1]
-
-9
-
-
-VoL. 91.] HIGH CouRT. | * |
-
-as evidence until one attesting witness, if procurable,-has been
-called for the purpose of proving its execution: ,The Evidence
-Act, is not exhaustive. The law of evidence is to be found in
-the Evidence Act and ‘in other Acts which make special pro-
-visions on ‘matters of evidence: In the matter of Rudolph
-Stallmann (1). -In my view sections 275-83 , of the. Suc-
-cession Act 1925 contain special provisions for proof
-in non-contentious ‘grants. The Evidence Act which is a
-general Statute is to be read as silently excluding from its opera-
-tion these special provisions. The prima facie proof for grant
-in non-contentious case is: furnished by the petition, declaration
-and verifications required by Sections 276, 280 and 281 of the
-Act. The making of a false statement in the petition and de-
-claration: is, by virtue of section ‘28% of the Act, punishable as
-‘an offence under section 193 of the Indian Penal Code. Strict
-proof of the will, is required in contentious proceedings which,
-under section 295 of the Act, takes the form of a regular suit,
-
-
-og:
-“3
-
 
 o
-Crvin.
-1953-
+4
 
-. —_— .
-In the goods of
-Atul Krishna
-‘Majumdar
-deceased:
-rn
-Bachawat, J.
+Processing Speed (x)
+N
+°
+6
+Writing Structure/Style (%)
 
+w
+~
+a
 
-[DIAGRAM 6]
+1.50
+“92
 
-[DIAGRAM 7]
+1.25
 
-[DIAGRAM 8]
+Tokens: 1
 
-. é
-In my view, the Court has the power to make the grant in
-non-contentious proceedings though-there is no affidavit from the
-executor or: the, attesting witnesses. oe
-The attestation clause of the Will in this case appears to be
-somewhat defective and the Court mighit well have called for
-an affidavit from an attesting witness. But the Court in the
-_exercise of its discretion didnot call for further proof. THe
-omission to call for further proof is not in the circumstantes of
-this case such a defect in the proceedings as entitles the peti-
-tioner to ask for revocation of the probate. -, .
-Under the Act.and our Rules in force on the date of the
-grant, the petitioner was not required to disclose the names of
-the persons interested in the estate of the deceased and,-in my
-‘view, the.failure to make such disclosure is not a defect in the
-proceedings. . Rule’ (a) of Chapter XXXV, which requires the
-petitioner to state the names of the relations upon whom the.
-estate-would have devolved in the case of intestacy was not in
-force on the date of the grant. 2 |
-7 a (1911), 15 C.AW.N. 1053 (1064-65), . °
+1.00 -90
 
+Single LLM AutoGen Team
 
-nd
+Method
 
+Fig. 4. Speed and Quality Across Methods
 
-[DIAGRAM 11]
-
-[DIAGRAM 12]
-
-[DIAGRAM 13]
-
-[DIAGRAM 14]
-
-[DIAGRAM 15]
-
+Proposed (GRPO)
 
 ==================================================
---- PAGE 9 (ROBUST PIPELINE) ---
+--- PAGE 5 (FAST LANE) ---
 
-[DIAGRAM 0]
+Table I. Overall Results (mean + s.e.m.)
 
-. ne ene eee Eee
+Table III. Performance by Task Type and Difficulty
 
+. Writing .
+Method Speed Structure/St aaa Rate Turns
+P yle (%) °
+Single 1.00+0.05 | 90.1+2.1 61.3428 14.2
+AutoGen | 1 g910.07 | 942419 68.1 42.5 113
+Team
+Proposed L L L
+(GRPO) | 2004009 | 98.740.7 74.6421 8.6
 
-[DIAGRAM 2]
+E. Learning Dynamics — How Teams Improve Over Time
 
-nga
-age
+To visualize how teams progress from “busy but inefficient”
+to “concise and effective,” we track writing quality and coding
+pass rate versus training steps (Fig. 3). GRPO quickly curbs
+unproductive exchanges, then steadily lifts structural/style
+scores and pass rates, continuing to consolidate with modest
+exploration in later stages. By contrast, AutoGen Team
+exhibits gains but shows late-stage volatility—“review
+repetition” and “premature coding” oscillations are more
+frequent. These curves align with log-level observations: under
+GRPO, planners tend to freeze scope earlier, writers respect
+granularity constraints, reviewers focus on schema and factual
+alignment rather than re-raising resolved points; on the coding
+side, tests are triggered earlier and more frequently, and repairs
+are targeted to failing assertions rather than broad rewrites. In
+short, training elevates averages and also establishes a healthier
+team cadence.
 
+Table Il. GRPO Ablations on Writing (n=150 prompts)
 
-THE CALCUTTA LAW JOURNAL. [VoL. 91.
-The proceedings for grant however were defective in
-substance because the petitioner ought to have been cited: but
-was not cited. As already stated, 'she is.one of the presumptive
--reversioners to the estate of Atul Krishna, and, as such, she was
+Variant Struct./Style (Yo) | Turns | Speed (x)
+Full GRPO (ours) 98.7 8.3 3.0
+w/o Group Baseline 96.9 9.8 2.5
+w/o Coord. Cost 96.1 10.6 2.3
+Joint Reward — Local Only | 94.0 12.1 2.0
 
-entitled to special citation: Akhileswari vy. Haricharan (1).
+F. Robustness and Breakdown — Task Types, Difficulty, and
+Failure Modes
 
-. What, then, is the effect of non-citation of the petitioner?
-Does it entitle her to immediate revocation of the grant or docs
-it entitle her to revocation only after further investigation.
+We further break down performance by genre and difficulty
+(Table III). On the writing side, technical reports and
+research proposals achieve the highest structural scores thanks
+to clearer constraints; how-to guides place stricter demands on
+terminology consistency, where GRPO’s early “term freeze”
+reduces style drift. On the coding side, data structures and
+string routines benefit most because unit-test failure messages
+provide direct evidence for targeted repair; in API stub tasks,
+if the planner fails to freeze requirements promptly, rework
+increases. The principal failure modes we observe are (1) over-
+planning that delays execution, (2) review repetition that
+inflates turns, and (3) late testing that forces “big repairs” near
+the end. Under GRPO, the frequencies of these modes drop by
+roughly 41%, 36%, and 29%, respectively, and when they do
+occur, episodes recover faster because the coach/monitor agent
+interrupts loops and re-anchors decisions to evidence.
 
-Under the English practice, if the executor has obtained
+Single LLM AutoGen
+Subset (Speed x / Team (x /%) Proposed (x / %)
+Qual. %) °
+Writing — Tech 1.05/91.2 1.86 /95.1 3.08 / 99.0
+Report (easy)
+Writing —
+Proposal 0.98 / 89.4 1.77/94.0 2.95 / 98.4
+(medium)
+Writing — How- 0.94 / 88.8 1.72 / 93.2 2.87 / 97.5
+to (hard)
+Coding —
+psiStrings (easy) | 102 / 63.0 1.85 / 69.5 3.05 / 76.9
+Coding — API
+Stubs (medium) 0.97 / 60.2 1.74/ 67.0 2.92 / 73.8
+Coding — Mixed | 9 93 ;5g.9 1.68 / 66.1 2.81 / 72.3
+(hard)
 
-“grant in common form in the absence of persons interested, the
-person who objects to the, grant enters a caveat and. cites the
-exccutor to bring in the grant and leave it in Court so that the’
-objector may proceed in due course of law for its revocation.
-Concurrently the objector commences an action for revocation
-of the probate-by issue of a writ of summons and alleging in the
-endorsement of claim on the writ and in the statement of claim
-the ‘grounds for revoking the. grant, e.g. invalidity of the Will.
-The defendant executor brings in and lodges the grant in_ the
-registry and appears to the writ.- The action thus defended:
-‘becomes an action for proof in solemn form. “The executor is
-put to proof of the Will in solemn form in the presence of the
-persons interested. The action is brought by a party whose
-interest is adversely affected by the probate in common form.
-‘T have given-d summary of the practice which may. be found in
-Tristram & Coote’s Probate: Practice (1gth Edition—pages 460,
-462, 468,- 472-74, 398-406, 1083, 1058-9, 1159,° 1163-4). ;
+G. Cost and Efficiency — Doing More with Less
 
-; By rule 33 of Chapter XXXV of our Rules the English
-practice may be followed-only in matters not provided for by the
-Succession Act. The proper course for ascertaining our probate
-practice is to examine in the first instance the language of the
-Succession Act. Section 263 of the. Act confers a discretion on
-the Court to revoke a grant if it was made without citing parties
-who ought to have been cited. : Judicial decisions show how this
-discretion is to be exercised. In Msst. Ramanandi Kuer v.
-Kalawati Kuer (2), where non-citation and genuineness of the
-Will were separately put in issue Lord Sinha observed: — —-
-QD 0923) 40 CLAY. 297” (2) (1927) ToRe gy TAs 18
+We decompose end-to-end costs into thinking cost (tokens)
+and waiting cost (wall-clock). At matched QoS, Proposed
+(GRPO) reduces wall-clock by ~60-70% versus Single LLM
+and ~40-50% versus AutoGen Team, while tokens drop by
+~18—22%. Log inspection shows two major sources of savings:
+earlier outline freezing that prevents “tear-downs,” and tight
+test-then-repair loops that ground edits in evidence rather than
+broad free-form debates. Fig. 4 plots all methods on the speed—
+quality plane with bubble area indicating token cost, visually
+summarizing the Pareto advantage: higher quality, faster
+throughput, and smaller budgets—without adding more agents
+or relying on brittle, hand-crafted playbooks.
 
+IV. DISCUSSION
 
-Crvin.
-. 1953-
-a?
-In the goods of
-Atul. Krishna
-‘Majumdar _
-deceased.
-= .
-Bachawat, J.
+Our gains come from changing how the team works, not
+from letting models talk more. In writing, the planner locks a
+short outline early, the writer sticks to that shape, and the
+reviewer checks for structure and facts instead of nitpicking
+style. That alone removes a lot of churn. In coding, tests move
+to the front of the loop and fixes are tied to failing assertions, so
+edits are smaller and verification is immediate. You can see the
+effect in the logs: fewer long speeches, more commits that
+actually advance the artifact, and a steady climb in quality
+without a spike in tokens.
 
+CTDE is the right fit for this. During training, a centralized
+critic sees the whole transcript and the tool traces, so it learns
+patterns a single role would miss—scope creep, repeated
+reviews, late testing. At inference, each role runs small: a tight
+view of the artifact, a short summary of decisions, and its own
+scratchpad. That constraint is a feature. It keeps prompts lean,
+reduces leakage, and forces clearer turns. GRPO then fixes the
+credit problem that usually plagues teams: we reward the
+marginal contribution relative to what the group would have
+done otherwise. Short, high-leverage moves get credit;
+redundant messages don’t. The tone of the team shifts from
+debate to evidence.
 
-[DIAGRAM 6]
-
-[DIAGRAM 7]
-
-[DIAGRAM 8]
-
-[DIAGRAM 9]
-
-A
-
-
-
-==================================================
---- PAGE 10 (ROBUST PIPELINE) ---
-
-[DIAGRAM 0]
-
-[DIAGRAM 1]
-
-[DIAGRAM 2]
-
-Vo.
-
-
-VoL. 91.] - HIGH COURT.
-' “Relevant illustrations to the sections are (b) ‘The
-* ‘grant was made without citing parties who ought to have
-_ been cited (c) The will of which probate was obtained was .
-. forged or revoked:
-“Jt is apparent that the plaintiff in this case sets up both
-these “grounds for revocation. The first issue as framed
-comes under illustration (b) and ‘the second issue under,
-‘. illustration (c). ;
-| _ “If these issues were tried separately and the plaintiff
-’ succeeded on the first issue, that in itself would have been
-sufficient for revoking the probate; but it would still be
-open to the defendant to prove the Will and,.if she suc-
-_ ceeded, the probate would stand.” , mo
-Proof of non-citation of a- person who ought to have been
-cited in itself is sufficient ground for revocation. ‘But the en-
-quiry on the petition for revocation ought not to be stopped in
-limine, for’ Lord ‘Sinha added “but it would still be open to
-the defendant to prove the Will and if she succeeded the probate
-would stand.” If. the. executor proves the Will the probate.
-stands. On such proof the petition for revocation is dismissed.
-‘The probate stands, not that a new grant is made. |)
-In Saroja Sundari Dassi v. Abhoy Charan Basak (1), the
-lower court had revoked the grant on mere proof of non-citation
-and on appeal this Court set aside that order observing that “ we
-cannot support the order for revocation at this stage; absence of
-citation or failure to serve the notice is not sufficient for re-
-voking the probate granted ex-parte. The proper course for the.
-learned Judge was to give to the appellant an opportunity for
-proving the Will in solemn form.
-If the Court is satisfied. that the summary grant should be
-recalled because’ of the absence of citation, the Court should
-‘not revoke the grant summarily. In Premchand Das v.
-‘Surendranath Saha (2), this Court set aside a summary order, of
-revocation observing that the Judge ought “ to have called upon
-the applicant for the grant of letters of administration to prove
-(1) (1914) LL.R. 41 Cale. 819. (35 (1904) g C.W.N. 190, -
-
-
-[DIAGRAM 5]
-
-235
-
-
-Civn.
-1953-0 -
-—
-In the goods of
-_Atu) Urishna
-\ Majumdar,
-" deteased.
-_ Bachawat, J.
-
-
-[DIAGRAM 8]
-
-[DIAGRAM 9]
-
-[DIAGRAM 10]
-
-ce nen Ca
-
-
+There are limits. Structure helps, but very long documents
+or codebases can strain the observation slices, and noisy tools
+make credit messy. Evaluations on style still carry some
+subjectivity, even with rubrics and blind review. And our setup
+favors methods that use tokens well; with unlimited budgets,
 
 ==================================================
---- PAGE 11 (ROBUST PIPELINE) ---
+--- PAGE 6 (FAST LANE) ---
 
-[DIAGRAM 0]
+conversational baselines can close some of the gap. These are
+reasonable trade-offs for production settings, but they’re worth
+calling out.
 
-[DIAGRAM 1]
+For deployment, start simple. Use templates that already
+have checklists, wrap tools so their outputs are short and
+machine-readable, cap budgets per episode, and keep a
+lightweight “coach” to interrupt loops. Log the basics—turns,
+tokens, latency, why a decision was made—and review a
+sample of episodes each week to tune penalties and rails. In
+practice, teams end up talking less and finishing more. That’s
+the point.
 
-[DIAGRAM 2]
+VV. CONCLUSION
 
-234
+We presented a reinforcement learning—-augmented LLM
+framework for cooperative decision making. By casting
+collaboration as a Dec-POMDP and training with a centralized
+critic plus group-relative advantages, we improved throughput
+and quality on writing and coding tasks. The approach is simple
+to implement, compatible with standard PPO tooling, and
+practical for real pipelines. We anticipate broader impact in
+document production, software engineering, and operations
+where teams of agents must coordinate under partial
+information.
 
+REFERENCES
 
-THE CALCUTTA LAW JOURNAL. (Vor. 91.
-the will in solemn form in the presence of the respondent, the
-objector, and after hearing the evidence and his objections, he
-then ought to have decided whether the order granting the
-letters of administration should stand or whether it: should be
-revoked.” If the Will is duly proved on further investigation
-the petition for revocation is dismissed and ‘the_probate stands
-although the proceedings for grant was defective on account of
-the absence of special citation. Ibrahim Medda v. Bhola Nath
-Lohari (1); and Appeal from Original Order No. 131/50, In the
-goods of Bendelal. Ghosh, deceased. "
+1] Papoudakis, G., Christianos, F., Schafer, L., & Albrecht, S. V. (2021).
+Benchmarking Multi-Agent Deep Reinforcement Learning Algorithms.
+Journal of Artificial Intelligence Research, 72, 1-52.
+https://doi.org/10.1613/jair.1.12742
 
-’ The Court has a discretion under section 263 of the Suc-
-cession Act not to revoke and it will not revoke the grant on
-account of technical defects in proceedings where the will is duly
-proved. t ' ;
+2] Schulman, J., Wolski, F., Dhariwal, P., Radford, A., & Klimov, O.
+Proximal Policy Optimization Algorithms. Advances in Neural
+Information Processing Systems (NeurIPS), 30, 2017.
 
-‘ _. If the grant is revoked the grantee is required by section 296
-of the Act to deliver up the probate in Court. mo,
-Pending ‘proof of the Will in solemn form on the petition
-of revocation the Court in Elokeshi Dassi v. Hurry Prosad Soor
-(2), made the following order: “The probate granted must be
-recalled and kept in the record of this court until the case is
-decided.” . ;
+3] Yu, C., Velu, A., Vinitsky, E., Wang, Y., Bayen, A., & Wu, Y. (2022).
+The Surprising Effectiveness of PPO in Cooperative Multi-Agent Games.
+Advances in Neural Information Processing Systems.
+https://doi.org/10.5555/3600270.3602057
 
-_ The form of the order in Prem Chand Das v. Surendra Nath
-Saha (3), was:—' the letters of administration granted to the
-appellants be recalled and the Judge do call upon them to prove
-the Will in solemn form in the presence of the respondent, the
-objector.’ © + , | }
+4] Rashid, T., Samvelyan, M., Schroeder, C., Farquhar, G., Foerster, J., &
+Whiteson, S. “QMIX: Monotonic Value Function Factorisation for Deep
+Multi-Agent Reinforcement Learning,” Proceedings of the 35th
+International Conference on Machine Learning (ICML), 2018.
 
-In both those cases the grant was recalled pending ‘pro-
-ceedings for proof.of the Will‘in solemn form and final decision
-of the petition for probate. Under the English practice this
-is done upon a citation by the executor to bring in the grant
-and lodge it in court so that the action for revocation may
-proceed. Tristram & Coote’s Probate Practice—igth Edition,
-pages 406, 474.1083. The question of recalling the grant pend-
-ing the enquiry has not been argued and I therefore do not give
-any direction on this point: , ;
+5] Foerster, J., Farquhar, G., Afouras, T., Nardelli, N., & Whiteson, S. (2018).
+Counterfactual Multi-Agent Policy Gradients. Proceedings of the AAAI
+Conference on Artificial Intelligence, 32(1).
+https://doi.org/10.1609/aaai.v32i1.11794
 
-~ Q) (945) 50 C.W.N. 423- (2) (1g03) 7 C.W.N. 430. «
-(3) (2904) 9 C.W.N. igo. . .
+6] Lowe, R., Wu, Y., Tamar, A., Harb, J., Abbeel, P., & Mordatch, I. (2017).
+Multi-Agent Actor-Critic for Mixed Cooperative-Competitive
+Environments. Advances in Neural Information Processing Systems,
+30.https://doi.org/10.5555/3295222.3295385
 
+7] Kuba, M., Schafer, L., Albrecht, S. V., & Peters, J. (2022). Trust Region
+Policy Optimisation in Multi-Agent Reinforcement Learning.
+International Conference on Learning Representations.
 
-Crvn..
-"1953
-—_—
+8] Fu, J., Zhang, H., & Xu, D. (2022). Revisiting Some Common Practices
+in Cooperative Multi-Agent Reinforcement Learning. Proceedings of the
+39th International Conference on Machine Learning.
+https://doi.org/10.5555/3524938.3525086
 
-In thé,goods of
-Awl Krishna
-Majumdar
-° deteased.
-Bachawat, J.
+9] Wu, Z., Zhang, S., Chen, M., et al. (2023). AutoGen: Enabling Next-Gen
+LLM Applications via Multi-Agent Conversation Framework.
+arXiv:2308.08155
 
+10] Hong, S., Zheng, L., Chen, Y., et al. (2023). MetaGPT: Meta
+Programming for A Multi-Agent Collaborative Framework.
+arXiv:2308.00352
 
-[DIAGRAM 6]
+11] Li, G., Hammoud, H. A., Itani, H., et al. (2023). AgentBench: Evaluating
+LLMs as Agents. arXiv:2308.03688
 
-[DIAGRAM 7]
-
-[DIAGRAM 8]
-
-[DIAGRAM 9]
-
-[DIAGRAM 10]
-
-
-==================================================
---- PAGE 12 (ROBUST PIPELINE) ---
-
-v
-
-
-VoL. 91.} ‘ ‘ HIGH COURT. - on
-The grounds of invalidity of the Will have not been clearly
-formulated in the pleadings. I have not called for further
-pleadings with regard to the suggested issues as it was not
-insisted upon by the respondents. me a ae
-In order to prevent multiplicity of litigation it is desirable
-that citation should issue to the other presumptive reversioner,
-namely, Santilata Ghose. ._— - ,
-I therefore, pass the following order: Bt
-_ The respondents Kanailal Chowdhury and Charu Chandra
-‘Chowdhury are called upon to prove the will in’ solemn form
-in these proceedings. ,
-The matter is set down for trial and will appear in the
-peremptory list of defended suits on the 25th February 1953.
-". (1) Was the Will executed by Atul Krishna Mazymdar -
-duly and in accordance with law? - .
-. . (2) Was the deceased at the time of the execution of the
-alleged Will of sound mind, memory and understanding? _
-(3) . Was execution of the Will obtained: by the undue in-
-fluence of Kanailal Chowdhury and Charu Chandra Chowdhury
-- Citation do issue calling upon Sm. Santilata Ghosh,
-mentioned in the petition, to come and see these proceedings. -
-The respondents Kanailal and Charu Chandra are directed
-to serve the citation on Sm. Santilata Ghosh by registered post.
-The citation directed by this order shall also be fixed -up.
-D. C. “Mitra: Solicitor for the Petitioner. ;
-Bhattacharjee & Siland L. M. Dutta Chowdhury: Solicitors
-for the: Respondents.’ _ os
-SGP , Will to be proved in
-, , . solemn form. .
-
-
-ekali
-795
-
-
-” Cin.
-1953- -
-‘ow,
-
-In the goods of
-Atul Krishna
-Majumdar |
-deceased. -
-Bachawat, J.
-
-
-[DIAGRAM 4]
-
-[DIAGRAM 5]
-
+[12] Ning, Z., & Xie, M. (2024). A Survey on Multi-Agent Reinforcement
+Learning: Challenges, Applications and Recent Advances. Journal of
+Automation and Intelligence.
 
 ==================================================

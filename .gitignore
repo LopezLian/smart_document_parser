@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.idea/
+.vscode/
+venv/
+venv311/
+extracted_output.txt
+debug_visuals.pdf
+*.pdf

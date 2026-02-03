@@ -5,6 +5,7 @@ import numpy as np
 import pytesseract as pt
 from PIL import Image
 import os
+import re  # <--- Added for text cleanup
 
 # --- CONFIGURATION ---
 if len(sys.argv) > 1:
@@ -27,14 +28,72 @@ scale_factor = (DPI / 300) ** 2
 
 # --- HELPER FUNCTIONS ---
 
+def basic_text_cleanup(text):
+    """
+    Safer cleanup that preserves list markers (1., A.) and technical text.
+    Removes Tesseract noise like hyphenation issues and orphaned punctuation.
+    """
+    if not text:
+        return ""
+
+    # 1. Fix Hyphenation: Join words split by hyphen+newline (Safe)
+    # "process-\ning" -> "processing"
+    text = re.sub(r'(\w+)-\s*\n\s*(\w+)', r'\1\2', text)
+
+    # 2. Remove pipes | often read from table borders (Safe for text)
+    text = text.replace('|', ' ')
+
+    # 3. Collapse whitespace (Safe)
+    text = re.sub(r'[ \t]+', ' ', text)
+
+    # 4. Safer Line Filtering
+    lines = text.split('\n')
+    clean_lines = []
+    for line in lines:
+        stripped = line.strip()
+
+        # LOGIC: Only delete the line if it is short AND has NO letters/numbers.
+        # This preserves "1." or "A." but kills ".." or "--" or "__"
+        if len(stripped) < 4 and not any(c.isalnum() for c in stripped):
+            continue
+
+        clean_lines.append(line)
+
+    text = "\n".join(clean_lines)
+
+    # 5. Limit newlines (Safe)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    return text.strip()
+
+
 def is_garbage_text(text):
     raw = text.strip()
     if not raw: return True
+
+    # 1. Too Short?
+    if len(raw) < 10: return True
+
+    # 2. Alphanumeric Ratio (Must be > 50% letters/numbers)
+    # Catches: "^&%#@(*&"
     alnum = sum(c.isalnum() for c in raw)
     total = len(raw)
-    if total < 5:
-        return (alnum / total) < 0.60
-    return (alnum / total) < 0.40
+    if (alnum / total) < 0.50: return True
+
+    # 3. Non-ASCII Ratio (Catches Encoding Errors like "Ã¢â‚¬")
+    # If > 20% of chars are weird symbols, it's garbage.
+    non_ascii = sum(1 for c in raw if ord(c) > 127)
+    if (non_ascii / total) > 0.20: return True
+
+    # 4. Dictionary / Vowel Check (Catches Gibberish like "xkzjpq")
+    # English words almost always have vowels (a,e,i,o,u,y).
+    # If a long string has NO vowels, it's likely noise.
+    if total > 20:
+        vowels = set("aeiouyAEIOUY")
+        vowel_count = sum(1 for c in raw if c in vowels)
+        if (vowel_count / total) < 0.10: return True
+
+    return False
 
 
 def fix_orientation(image):
@@ -273,10 +332,11 @@ for page_num, page in enumerate(doc):
     fast_lane_success = False
 
     # --- FAST LANE ---
+    # --- FAST LANE ---
     if has_digital_layer:
         print("   >>> Digital Layer Detected. Attempting Fast Lane...")
 
-        # 1. SKEW CORRECTION
+        # 1. SKEW CORRECTION (Fast Lane)
         fast_skew, fast_debug_img = get_skew_angle(img_gray)
 
         if abs(fast_skew) > 0.5:
@@ -292,24 +352,30 @@ for page_num, page in enumerate(doc):
         else:
             skew_summary.append((page_num + 1, 0.0, "Fast Lane"))
 
-        # 2. NOISE CORRECTION (Inside Fast Lane)
+        # 2. NOISE CORRECTION (Fast Lane)
         if is_page_dirty(img_gray):
             print("   >>> [Fast Lane] Noise detected. Applying Gentle Bilateral (5, 25, 25)...")
             img_bgr = clean_digital_noise(img_bgr, d=5, sigmaColor=25, sigmaSpace=25)
 
-        # # DEBUG PRE-OCR
-        # debug_ocr_input = img_bgr.copy()
-        # cv2.putText(debug_ocr_input, "DEBUG: FAST LANE INPUT (Pre-OCR)", (50, 100),
-        #             cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
-        # debug_images_list.append(Image.fromarray(cv2.cvtColor(debug_ocr_input, cv2.COLOR_BGR2RGB)))
-
-        # --- PROCEED TO OCR ---
+        # --- PROCEED TO OCR (WITH CONFIDENCE CHECK) ---
         try:
-            fast_text = pt.image_to_string(img_bgr, config='--psm 3')
-        except:
-            fast_text = ""
+            # Get detailed data (Conf) AND string text
+            data_fast = pt.image_to_data(img_bgr, config='--psm 3', output_type=pt.Output.DICT)
+            raw_fast = pt.image_to_string(img_bgr, config='--psm 3')
+            fast_text = basic_text_cleanup(raw_fast)
 
-        if len(fast_text.strip()) > 50 and not is_garbage_text(fast_text):
+            # Calculate Average Confidence (Ignore empty blocks marked '-1')
+            confs = [int(c) for c in data_fast['conf'] if c != '-1']
+            avg_conf = sum(confs) / len(confs) if confs else 0
+            print(f"   >>> [Fast Lane] Confidence: {avg_conf:.2f}%")
+
+        except Exception as e:
+            print(f"   >>> [Fast Lane] OCR Error: {e}")
+            fast_text = ""
+            avg_conf = 0
+
+        # SUCCESS CHECK: Must be Valid Text AND > 50% Confident
+        if len(fast_text.strip()) > 50 and not is_garbage_text(fast_text) and avg_conf > 50:
             print("   >>> SUCCESS: Fast Lane OCR extracted text.")
             full_document_text += f"--- PAGE {page_num + 1} (FAST LANE) ---\n\n{fast_text}\n" + "=" * 50 + "\n"
 
@@ -318,12 +384,13 @@ for page_num, page in enumerate(doc):
             debug_images_list.append(Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)))
 
             fast_lane_success = True
-            continue
+            continue  # <--- Skip Robust Lane
         else:
-            print("   >>> Fast Lane produced garbage. Fallback to Robust Lane.")
+            print(f"   >>> Fast Lane failed (Conf: {avg_conf:.2f}% or Garbage). FALLING THROUGH to Robust Lane...")
 
     else:
         print("   >>> No Digital Layer found. FORCING Robust Pipeline.")
+
 
     # --- ROBUST PIPELINE ---
 
@@ -362,7 +429,7 @@ for page_num, page in enumerate(doc):
     if is_dirty:
         print("      [Robust] Mode: DIRTY -> Using Dual Pipeline (Aggressive Layout / Gentle OCR)")
 
-        img_gray=cv2.GaussianBlur(img_gray, (3, 3), 0)  # anti-dithering fix
+        img_gray = cv2.GaussianBlur(img_gray, (5, 5), 0)  # anti-dithering fix
         # A. LAYOUT PATH (Aggressive: 7, 55, 55)
         blur_layout = cv2.bilateralFilter(img_gray, 7, 55, 55)
         thresh_layout_base = cv2.adaptiveThreshold(blur_layout, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,
@@ -406,7 +473,8 @@ for page_num, page in enumerate(doc):
         try:
             # Run PSM 3 on the whole cropped image
             data_psm3 = pt.image_to_data(healed_ocr_img, config="--psm 3", output_type=pt.Output.DICT)
-            clean_text_psm3 = pt.image_to_string(healed_ocr_img, config="--psm 3")
+            raw_psm3 = pt.image_to_string(healed_ocr_img, config="--psm 3")
+            clean_text_psm3 = basic_text_cleanup(raw_psm3)  # <--- CLEANUP INSERTED
             clean_conf_psm3 = get_ocr_confidence(data_psm3)
             print(f"      [Robust Clean] PSM 3 Confidence: {clean_conf_psm3:.2f}")
         except:
@@ -419,7 +487,7 @@ for page_num, page in enumerate(doc):
     blocks = filter_giant_blocks(blocks, healed_ocr_img.shape[1], healed_ocr_img.shape[0])
     blocks = remove_nested_blocks(blocks)
 
-    print(f"      [Robust] Found {len(blocks)} blocks.")
+    print(f"      [Robust] Found {len(blocks)} raw blocks.")
 
     # 7. Extraction & Confidence Comparison
     vis_image_bgr = cv2.cvtColor(healed_ocr_img, cv2.COLOR_GRAY2BGR)
@@ -430,11 +498,12 @@ for page_num, page in enumerate(doc):
     layout_conf_count = 0
     block_results = []
 
-    manual_block_count = len(blocks)
+    manual_block_count = len(blocks)  # Keep this for the "Fragmentation" check (speed)
+    valid_green_blocks = 0  # <--- NEW: Count only valid text for "Structure" check
     forced_psm3 = False
 
     # --- UPDATED: INSTANT SWITCH LOGIC ---
-    # If blocks > 50 in Clean Mode, skip Manual OCR completely
+    # If raw blocks > 50 in Clean Mode, skip Manual OCR completely (Speed optimization)
     if is_clean_mode and manual_block_count > 50:
         print(
             f"      [Robust Clean] Manual Layout Fragmented ({manual_block_count} blocks > 50). Instantly switching to PSM 3.")
@@ -449,7 +518,8 @@ for page_num, page in enumerate(doc):
 
             try:
                 data_box = pt.image_to_data(roi, config="--oem 3 --psm 6", output_type=pt.Output.DICT)
-                text_box = pt.image_to_string(roi, config="--oem 3 --psm 6")
+                raw_box = pt.image_to_string(roi, config="--oem 3 --psm 6")
+                text_box = basic_text_cleanup(raw_box)
                 conf_box = get_ocr_confidence(data_box)
             except:
                 text_box = ""
@@ -457,11 +527,13 @@ for page_num, page in enumerate(doc):
 
             if is_garbage_text(text_box):
                 block_results.append((i, x, y, w, h, "diagram", "", 0))
+                # Note: We do NOT increment valid_green_blocks here
             else:
                 block_results.append((i, x, y, w, h, "text", text_box, conf_box))
                 layout_text_full += text_box + "\n\n"
                 layout_conf_sum += conf_box
                 layout_conf_count += 1
+                valid_green_blocks += 1  # <--- NEW: Only count GREEN boxes
 
     # Calculate Average Confidence for Layout Path
     layout_avg_conf = (layout_conf_sum / layout_conf_count) if layout_conf_count > 0 else 0.0
@@ -484,8 +556,9 @@ for page_num, page in enumerate(doc):
         except:
             psm3_block_count = 1
 
+        # UPDATED PRINT: Shows Valid Green Blocks vs PSM3
         print(
-            f"      [Robust Clean] Structure -> Manual Blocks: {manual_block_count} | PSM 3 Blocks: {psm3_block_count}")
+            f"      [Robust Clean] Structure -> Valid Green Blocks: {valid_green_blocks} (Raw: {manual_block_count}) | PSM 3 Blocks: {psm3_block_count}")
 
         # Condition 0: Forced Fragmentation (Immediate Switch)
         if forced_psm3:
@@ -497,11 +570,20 @@ for page_num, page in enumerate(doc):
             use_psm3 = True
             reason = f"Higher Confidence (+8)"
 
-        # Condition 2: Structural Superiority (New)
-        elif manual_block_count <= 3 and psm3_block_count > min(manual_block_count, 3):
+        # Condition 2: Structural Superiority (UPDATED)
+        # Check uses valid_green_blocks now. If we have 1 green block + 10 orange blocks,
+        # valid_green_blocks is 1. Since 1 <= 3, we enter this check.
+        elif valid_green_blocks <= 3 and psm3_block_count > min(valid_green_blocks, 3):
             if clean_conf_psm3 > 50:
                 use_psm3 = True
                 reason = "Better Layout Detection (Multi-block vs Single)"
+
+        # Condition 3: Garbage Dominance (NEW IMPLICIT REQUEST)
+        # If we found mostly garbage (e.g. 20 blocks total, but only 1 was green), trust PSM3
+        elif manual_block_count > 5 and valid_green_blocks < 2:
+            if clean_conf_psm3 > 60:
+                use_psm3 = True
+                reason = "Manual Layout mostly garbage/noise"
 
     # --- APPLY DECISION ---
     if use_psm3:

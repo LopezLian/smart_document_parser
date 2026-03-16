@@ -5,7 +5,7 @@ import numpy as np
 import pytesseract as pt
 from PIL import Image
 import os
-import re  # <--- Added for text cleanup
+import re
 
 # --- NEW: IMPORT FOR SMART SCORING GATEKEEPER ---
 try:
@@ -24,9 +24,16 @@ else:
     print("Usage: python parser.py <path_to_pdf>")
     sys.exit(1)
 
-OUTPUT_PDF_NAME = "debug_visuals.pdf"
-OUTPUT_SKEW_PDF_NAME = "debug_skew.pdf"
-OUTPUT_TEXT_NAME = "extracted_output.txt"
+# --- DYNAMIC OUTPUT DIRECTORY SETUP ---
+# Creates ./output/pdf_name/ to perfectly match the LightOn parser structure
+PDF_BASENAME = os.path.basename(PDF_PATH)
+PDF_FILENAME, _ = os.path.splitext(PDF_BASENAME)
+OUTPUT_DIR = os.path.join("./output", PDF_FILENAME)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Point debug PDFs to save inside the new folder
+OUTPUT_PDF_NAME = os.path.join(OUTPUT_DIR, "debug_visuals.pdf")
+OUTPUT_SKEW_PDF_NAME = os.path.join(OUTPUT_DIR, "debug_skew.pdf")
 
 DPI = 300
 MIN_WIDTH_INCH = 0.1
@@ -38,6 +45,63 @@ scale_factor = (DPI / 300) ** 2
 
 # --- HELPER FUNCTIONS ---
 
+def detect_hindi_page(image, digital_text=""):
+    """
+    Highly Accurate Hybrid Hindi Detector
+    Uses consecutive character grouping (words) AND strict density ratios to eliminate English hallucinations.
+    """
+
+    def evaluate_text_for_hindi(text, source_name):
+        if not text: return False
+
+        # 1. Count raw Hindi characters
+        hindi_chars = len(re.findall(r'[\u0900-\u097F]', text))
+
+        # 2. Count Hindi "words" (2 or more consecutive Devanagari characters)
+        hindi_words = len(re.findall(r'[\u0900-\u097F]{2,}', text))
+
+        # 3. Calculate Density (Hindi chars vs Total Non-Whitespace chars)
+        total_chars = len(re.sub(r'\s+', '', text))
+        density = (hindi_chars / total_chars) if total_chars > 0 else 0.0
+
+        print(
+            f"      [Detector - {source_name}] Hindi Chars: {hindi_chars} | Hindi Words (2+ chars): {hindi_words} | Density: {density:.2%}")
+
+        # STRICT DUAL-THRESHOLD
+        if hindi_words >= 20 and density >= 0.20:
+            return True
+
+        return False
+
+    print("   >>> [Detector] Evaluating Digital Layer for Hindi...")
+    if evaluate_text_for_hindi(digital_text, "Digital"):
+        return True
+
+    print("   >>> [Detector] Digital Layer inconclusive. Running Fast Visual Fallback...")
+    try:
+        # Downscale to 800px max for lightning-fast processing
+        h, w = image.shape[:2]
+        scale = 800.0 / max(h, w)
+        if scale < 1.0:
+            resized = cv2.resize(image, (int(w * scale), int(h * scale)))
+        else:
+            resized = image
+
+        # Quick binarization
+        _, binary = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        # Fast OCR pass targeting both languages
+        fast_text = pt.image_to_string(binary, config='-l eng+hin --psm 3')
+
+        if evaluate_text_for_hindi(fast_text, "Visual"):
+            return True
+
+    except Exception as e:
+        print(f"      [Detector] Visual Hindi detection failed: {e}")
+
+    return False
+
+
 def basic_text_cleanup(text):
     """
     Safer cleanup that preserves list markers (1., A.) and technical text.
@@ -47,8 +111,6 @@ def basic_text_cleanup(text):
         return ""
 
     # 1. THE FIX: Do No Harm Hyphenation
-    # "cross-\nexamination" -> "cross- examination"
-    # "ISO-\n9001" -> "ISO- 9001"
     text = re.sub(r'-\s*\n\s*', '- ', text)
 
     # 2. Remove pipes | often read from table borders
@@ -62,11 +124,8 @@ def basic_text_cleanup(text):
     clean_lines = []
     for line in lines:
         stripped = line.strip()
-
-        # LOGIC: Only delete the line if it is short AND has NO letters/numbers.
         if len(stripped) < 4 and not any(c.isalnum() for c in stripped):
             continue
-
         clean_lines.append(line)
 
     text = "\n".join(clean_lines)
@@ -81,23 +140,15 @@ def is_garbage_text(text):
     raw = text.strip()
     if not raw: return True
 
-    # 1. Too Short?
     if len(raw) < 10: return True
 
-    # 2. Alphanumeric Ratio (Must be > 50% letters/numbers)
-    # Catches: "^&%#@(*&"
     alnum = sum(c.isalnum() for c in raw)
     total = len(raw)
     if (alnum / total) < 0.50: return True
 
-    # 3. Non-ASCII Ratio (Catches Encoding Errors like "Ã¢â‚¬")
-    # If > 20% of chars are weird symbols, it's garbage.
     non_ascii = sum(1 for c in raw if ord(c) > 127)
     if (non_ascii / total) > 0.20: return True
 
-    # 4. Dictionary / Vowel Check (Catches Gibberish like "xkzjpq")
-    # English words almost always have vowels (a,e,i,o,u,y).
-    # If a long string has NO vowels, it's likely noise.
     if total > 20:
         vowels = set("aeiouyAEIOUY")
         vowel_count = sum(1 for c in raw if c in vowels)
@@ -106,50 +157,39 @@ def is_garbage_text(text):
     return False
 
 
-# --- OPTIMIZED: RESTORED TWO-FACTOR QUALITY GATE WITH PUNCTUATION SWAP ---
 def get_page_quality_score(page_text, page_conf):
     """
     Evaluates final extracted text.
-    Replaces punctuation with spaces to fix Python's word-counting math on dense blocks.
+    Uses a hybrid token-to-word ratio to catch margin garbage while preserving valid words.
     """
     if not page_text or len(page_text.strip()) == 0:
         return 999.0, "GARBAGE (Empty)"
 
-    # 1. Strip out our script's structural markers
-    clean_text = re.sub(r'\[IMAGE.*?\]|\[DIAGRAM.*?\]|--- PAGE.*?---|=+', '', page_text).strip()
+    raw_text = re.sub(r'\[IMAGE.*?\]|\[DIAGRAM.*?\]|--- PAGE.*?---|=+', '', page_text).strip()
+    raw_text = re.sub(r'http[s]?://\S+|www\.\S+|doi\.org/\S+|\S+@\S+|arXiv:\S+', '', raw_text)
+    scoring_text = re.sub(r'[\[\]\(\)\,\:\;\"\']', ' ', raw_text)
 
-    # 2. Strip URLs, DOIs, and Emails (These permanently ruin token ratios)
-    clean_text = re.sub(r'http[s]?://\S+|www\.\S+|doi\.org/\S+|\S+@\S+', '', clean_text)
+    clean_for_words = re.sub(r'[/\.\-_@&]', ' ', scoring_text)
+    clean_for_words = re.sub(r'\s+', ' ', clean_for_words).strip()
 
-    # 3. THE FIX: Swap word-gluing punctuation for blank spaces
-    # This turns "W/O.M.DEVADAS" into "W O M DEVADAS" so Python counts 4 words instead of 1
-    clean_text = re.sub(r'[/\.\-_@&]', ' ', clean_text)
-
-    # Clean up double spaces created by the swap
-    clean_text = re.sub(r'\s+', ' ', clean_text).strip()
-
-    words = clean_text.split()
+    words = clean_for_words.split()
     word_count = len(words)
 
     if word_count < 10:
         return 999.0, "GARBAGE (No Text Extracted)"
-
-    # THE NEW TRAP: Catches severe drop-outs and routes Cover Pages to dots.ocr
     elif word_count < 45:
         return 999.0, f"GARBAGE (Sparse Text: {word_count} words - Likely Cover Page or Bad Extraction)"
 
     if legal_tokenizer:
-        tokens = legal_tokenizer.encode(clean_text, add_special_tokens=False)
+        tokens = legal_tokenizer.tokenize(scoring_text)
         ratio = len(tokens) / word_count
     else:
         ratio = 1.0
 
-        # --- TWO-FACTOR ROUTING LOGIC ---
-    if ratio > 1.70:
+    if ratio > 1.80:
         return ratio, "GARBAGE (High Error Rate)"
-    elif 1.45 < ratio <= 1.70:
-        # The Gray Area Check
-        if page_conf < 60:
+    elif 1.50 < ratio <= 1.80:
+        if page_conf < 65:
             return ratio, f"GARBAGE (Borderline Ratio + Low Conf: {page_conf:.1f}%)"
         else:
             return ratio, f"CLEAN (Borderline Ratio + High Conf: {page_conf:.1f}%)"
@@ -159,12 +199,21 @@ def get_page_quality_score(page_text, page_conf):
 
 def fix_orientation(image):
     MIN_CONFIDENCE = 5.0
-    h, w = image.shape
-    crop = image[h // 2 - h // 4: h // 2 + h // 4, w // 2 - w // 4: w // 2 + w // 4]
-    _, binary_crop = cv2.threshold(crop, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    h, w = image.shape[:2]
+
+    scale = 800.0 / max(h, w)
+    if scale < 1.0:
+        resized = cv2.resize(image, (int(w * scale), int(h * scale)))
+    else:
+        resized = image
+
+    if len(resized.shape) == 3:
+        resized = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+
+    _, binary_resized = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
     try:
-        custom_config = f'--dpi {DPI} --psm 0'
-        osd = pt.image_to_osd(binary_crop, config=custom_config, output_type=pt.Output.DICT)
+        osd = pt.image_to_osd(binary_resized, config='--psm 0', output_type=pt.Output.DICT)
         if osd['rotate'] != 0 and osd['orientation_conf'] > MIN_CONFIDENCE:
             print(f"      [Robust] Correcting Orientation: {osd['rotate']}°")
             if osd['rotate'] == 90:
@@ -173,7 +222,7 @@ def fix_orientation(image):
                 return cv2.rotate(image, cv2.ROTATE_180)
             elif osd['rotate'] == 270:
                 return cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
-    except:
+    except Exception:
         pass
     return image
 
@@ -191,10 +240,9 @@ def get_skew_angle(image):
     edges = cv2.Canny(gray, 50, 150)
     lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=100, maxLineGap=10)
 
-    # Prepare Debug Image
     debug_vis = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
-
     angles = []
+
     if lines is not None:
         for l in lines:
             x1, y1, x2, y2 = l[0]
@@ -202,30 +250,26 @@ def get_skew_angle(image):
 
             if -45 < angle < 45:
                 angles.append(angle)
-                cv2.line(debug_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)  # Green
+                cv2.line(debug_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
             else:
-                cv2.line(debug_vis, (x1, y1), (x2, y2), (0, 0, 255), 2)  # Red
+                cv2.line(debug_vis, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-    # --- THE UPGRADE: PROJECTION PROFILE FALLBACK ---
     num_lines = len(angles)
+
     if num_lines < 10 or (num_lines >= 10 and np.std(angles) > 2.5):
         print("      [Skew] HoughLines insufficient/noisy. Triggering Projection Profile Fallback...")
 
-        # Invert to white text on black background for accurate pixel summation
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
         h, w = binary.shape
         center = (w // 2, h // 2)
 
         def get_variance(angle):
-            # INTER_NEAREST is faster for binary images during sweeps
             M = cv2.getRotationMatrix2D(center, angle, 1.0)
             rotated = cv2.warpAffine(binary, M, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT,
                                      borderValue=0)
             projection = np.sum(rotated, axis=1)
             return np.var(projection)
 
-        # 1. Coarse Sweep: -5.0 to +5.0 degrees (1 degree steps)
         best_coarse_angle = 0.0
         max_var = 0.0
         for angle in np.arange(-5.0, 6.0, 1.0):
@@ -234,7 +278,6 @@ def get_skew_angle(image):
                 max_var = variance
                 best_coarse_angle = angle
 
-        # 2. Fine Sweep: Zoom in around the best coarse angle (0.1 degree steps)
         best_final_angle = best_coarse_angle
         for angle in np.arange(best_coarse_angle - 1.0, best_coarse_angle + 1.1, 0.1):
             variance = get_variance(angle)
@@ -242,13 +285,11 @@ def get_skew_angle(image):
                 max_var = variance
                 best_final_angle = angle
 
-        # Visual indicator that the fallback was triggered
         cv2.putText(debug_vis, f"Fallback Skew: {best_final_angle:.2f}", (30, 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 100, 100), 2)
 
         return best_final_angle, debug_vis
 
-    # If Hough Lines was successful and tight, use it (Fast Path)
     return np.median(angles), debug_vis
 
 
@@ -276,21 +317,14 @@ def clean_heavy_grain(binary_image, min_area=int(150 * scale_factor)):
     return cv2.bitwise_not(clean_inverted)
 
 
-# --- OPTIMIZED: NON-LOCAL MEANS DENOISING ---
 def clean_digital_noise(image, h=10, templateWindowSize=7, searchWindowSize=21):
-    """
-    Applies Non-Local Means Denoising to gently lift noise without eating text strokes.
-    Removes global Otsu thresholding so Tesseract handles binarization natively.
-    """
     if len(image.shape) == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
         gray = image
 
-    # Apply NL Means Denoising (h=10 is a good default for text documents)
-    denoised = cv2.fastNlMeansDenoising(gray, None, h=h, templateWindowSize=templateWindowSize, searchWindowSize=searchWindowSize)
-
-    # Return as BGR because the Fast Lane expects img_bgr to pass to pytesseract
+    denoised = cv2.fastNlMeansDenoising(gray, None, h=h, templateWindowSize=templateWindowSize,
+                                        searchWindowSize=searchWindowSize)
     return cv2.cvtColor(denoised, cv2.COLOR_GRAY2BGR)
 
 
@@ -331,7 +365,6 @@ def get_sorted_text_blocks(layout_map, min_w, min_h, dpi):
         x, y, w, h = cv2.boundingRect(c)
         if w < min_w or h < min_h: continue
 
-        # Geometric Filters
         aspect = w / float(h)
         if aspect > 50: continue
         if h / float(w) > 50: continue
@@ -372,7 +405,6 @@ def remove_nested_blocks(blocks):
 
             intersection_area = inter_w * inter_h
             if intersection_area == 0: continue
-
             overlap_ratio = intersection_area / area_i
 
             if overlap_ratio > 0.50:
@@ -392,7 +424,6 @@ def is_dense_graphic(roi_binary):
 
 
 def get_ocr_confidence(ocr_data_dict):
-    """Calculates average confidence from pytesseract data dict."""
     confs = [int(c) for c in ocr_data_dict['conf'] if c != '-1']
     if not confs: return 0
     return sum(confs) / len(confs)
@@ -403,17 +434,19 @@ def get_ocr_confidence(ocr_data_dict):
 skew_summary = []
 debug_images_list = []
 debug_skew_list = []
-
-# --- NEW: ROUTING TRACKER ---
 pages_for_dots_ocr = []
 
 doc = fitz.open(PDF_PATH)
-full_document_text = ""
 
 print(f"Processing PDF: {PDF_PATH} ({len(doc)} pages)")
+print(f"Saving extracted markdown files to: {OUTPUT_DIR}/")
 
 for page_num, page in enumerate(doc):
     print(f"\n--- Processing Page {page_num + 1} ---")
+
+    # Setup specific filename for this page to match LightOn parser
+    page_md_filename = f"{PDF_FILENAME}_page_{page_num + 1}.md"
+    page_md_path = os.path.join(OUTPUT_DIR, page_md_filename)
 
     pix = page.get_pixmap(dpi=DPI, alpha=False)
     img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width, pix.n))
@@ -425,19 +458,149 @@ for page_num, page in enumerate(doc):
         img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
         img_gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
 
-    # --- GATEKEEPER ---
-    embedded_text_check = page.get_text("text")
-    has_digital_layer = False
-    if len(embedded_text_check) > 50 and not is_garbage_text(embedded_text_check):
-        has_digital_layer = True
+    raw_native_text = page.get_text("text")
 
-    fast_lane_success = False
+    # --- TOP LEVEL ROUTER: HINDI PIPELINE FORK ---
+    if detect_hindi_page(img_gray, raw_native_text):
+        print("   >>> [Router] Hindi script detected! Routing to dedicated Hindi Pipeline...")
 
-    # --- FAST LANE ---
-    if has_digital_layer:
-        print("   >>> Digital Layer Detected. Attempting Fast Lane...")
+        # --- 1. TIER 1: DIGITAL HINDI GATEKEEPER ---
+        native_text_hin = basic_text_cleanup(raw_native_text)
 
-        # 1. SKEW CORRECTION (Fast Lane)
+        is_digital_valid = False
+        if len(native_text_hin) > 50 and not is_garbage_text(native_text_hin):
+            # Verify the digital layer isn't a bogus English layer on a Hindi image
+            hin_chars = len(re.findall(r'[\u0900-\u097F]', native_text_hin))
+            tot_alnum = sum(c.isalnum() for c in native_text_hin)
+            if tot_alnum > 0 and (hin_chars / tot_alnum) > 0.15:
+                is_digital_valid = True
+
+        if is_digital_valid:
+            print("      [Hindi Pipeline] Pristine digital Hindi layer verified. Bypassing OCR.")
+            final_hindi_text = f"--- PAGE {page_num + 1} (HINDI TIER 1: NATIVE DIGITAL) ---\n\n{native_text_hin}\n" + "=" * 50 + "\n"
+            with open(page_md_path, "w", encoding="utf-8") as f:
+                f.write(final_hindi_text)
+
+            cv2.rectangle(img_bgr, (0, 0), (img_bgr.shape[1], 80), (255, 200, 0), -1)
+            cv2.putText(img_bgr, "HINDI: NATIVE DIGITAL", (40, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 0), 3)
+            debug_images_list.append(Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)))
+            skew_summary.append((page_num + 1, 0.0, "Hindi Digital (Skipped)"))
+            continue
+        else:
+            print("      [Hindi Pipeline] Digital layer missing or bogus. Proceeding to visual check...")
+
+        # --- 2. DIRTY SCAN ROUTING (DO NOT TOUCH RULE) ---
+        if is_page_dirty(img_gray):
+            print("      [Hindi Pipeline] DIRTY SCAN DETECTED. Shirorekha at risk. Routing directly to dots.ocr...")
+            pages_for_dots_ocr.append(page_num + 1)
+
+            final_hindi_text = f"--- PAGE {page_num + 1} (HINDI PIPELINE) ---\n\n[DIRTY SCAN: Routed to dots.ocr to preserve text integrity]\n" + "=" * 50 + "\n"
+            with open(page_md_path, "w", encoding="utf-8") as f:
+                f.write(final_hindi_text)
+
+            cv2.rectangle(img_bgr, (0, 0), (img_bgr.shape[1], 80), (0, 0, 255), -1)
+            cv2.putText(img_bgr, "HINDI: DIRTY -> DOTS.OCR", (40, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 0), 3)
+            debug_images_list.append(Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)))
+            skew_summary.append((page_num + 1, 0.0, "Hindi Dirty (Routed)"))
+            continue
+
+        # --- 3. CLEAN SCAN FAST OCR ---
+        print("      [Hindi Pipeline] Clean scan detected. Attempting gentle visual OCR...")
+
+        # Orientation & Skew on Clean Image
+        img_bgr_hin = fix_orientation(img_bgr)
+        img_gray_hin = cv2.cvtColor(img_bgr_hin, cv2.COLOR_BGR2GRAY)
+
+        hindi_skew, hindi_skew_debug = get_skew_angle(img_gray_hin)
+        if abs(hindi_skew) > 0.5:
+            print(f"      [Hindi Pipeline] Detected Skew {hindi_skew:.2f}°. Correcting...")
+            img_bgr_hin = rotate_image(img_bgr_hin, hindi_skew)
+
+            if hindi_skew_debug is not None:
+                cv2.putText(hindi_skew_debug, f"Page {page_num + 1} (Hindi): Skew {hindi_skew:.2f}", (50, 100),
+                            cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 165, 255), 4)
+                debug_skew_list.append(Image.fromarray(cv2.cvtColor(hindi_skew_debug, cv2.COLOR_BGR2RGB)))
+            skew_summary.append((page_num + 1, hindi_skew, "Hindi Clean Correction"))
+        else:
+            skew_summary.append((page_num + 1, 0.0, "Hindi Clean (No Skew)"))
+
+        # ---> NEW: GENTLE DENOISING TEST <---
+        print("      [Hindi Pipeline] Applying gentle bilateral filter to test confidence boost...")
+        img_bgr_hin = cv2.bilateralFilter(img_bgr_hin, d=5, sigmaColor=15, sigmaSpace=15)
+
+        # Straight to Extraction
+        print("      [Hindi Pipeline] Extracting text using hin+eng...")
+        try:
+            data_hindi = pt.image_to_data(img_bgr_hin, config='-l hin+eng --psm 3', output_type=pt.Output.DICT)
+            raw_hindi = pt.image_to_string(img_bgr_hin, config='-l hin+eng --psm 3')
+            hindi_text = basic_text_cleanup(raw_hindi)
+            hindi_conf = get_ocr_confidence(data_hindi)
+        except Exception as e:
+            print(f"      [!] Hindi OCR Error: {e}")
+            hindi_text = ""
+            hindi_conf = 0.0
+
+        print(f"      [Hindi Pipeline] Extraction Confidence: {hindi_conf:.2f}%")
+
+        # Basic Quality Gate
+        if hindi_conf < 65.0:
+            print(f"   >>> [Hindi Quality Gate] FAILED (Conf: {hindi_conf:.2f}% < 65.0%). Routing to dots.ocr...")
+            pages_for_dots_ocr.append(page_num + 1)
+            status_label = f"HINDI FAILED ({hindi_conf:.1f}%)"
+            box_color = (0, 0, 255)
+        else:
+            print(f"   >>> [Hindi Quality Gate] PASSED (Conf: {hindi_conf:.2f}%).")
+            status_label = f"HINDI PASSED ({hindi_conf:.1f}%)"
+            box_color = (0, 255, 0)
+
+            # Save Output
+        final_hindi_text = f"--- PAGE {page_num + 1} (HINDI TIER 2: CLEAN OCR) ---\n\n{hindi_text}\n" + "=" * 50 + "\n"
+        with open(page_md_path, "w", encoding="utf-8") as f:
+            f.write(final_hindi_text)
+
+        # Visual Debugging
+        cv2.rectangle(img_bgr_hin, (0, 0), (img_bgr_hin.shape[1], 80), box_color, -1)
+        cv2.putText(img_bgr_hin, status_label, (40, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 0), 3)
+        debug_images_list.append(Image.fromarray(cv2.cvtColor(img_bgr_hin, cv2.COLOR_BGR2RGB)))
+
+        # Skip the entire English pipeline
+        continue
+    # ---------------------------------------------
+
+    # --- EXISTING ENGLISH PIPELINE ---
+    native_text = basic_text_cleanup(raw_native_text)
+
+    native_score, native_status = get_page_quality_score(native_text, 50.0)
+    attempt_fast_lane = False
+
+    if len(native_text) > 50 and not is_garbage_text(native_text) and "CLEAN" in native_status:
+        print(f"   >>> [Gatekeeper] Pristine digital layer verified (Score: {native_score:.2f}). Bypassing OCR.")
+
+        page_text_to_add = f"--- PAGE {page_num + 1} (TIER 1: NATIVE DIGITAL) ---\n\n{native_text}\n" + "=" * 50 + "\n"
+
+        # Write output immediately to disk for this page
+        with open(page_md_path, "w", encoding="utf-8") as f:
+            f.write(page_text_to_add)
+
+        cv2.rectangle(img_bgr, (0, 0), (img_bgr.shape[1], 80), (255, 200, 0), -1)
+        cv2.putText(img_bgr, "TIER 1: NATIVE DIGITAL", (40, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 0), 3)
+        debug_images_list.append(Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)))
+
+        skew_summary.append((page_num + 1, 0.0, "Native Digital (Skipped)"))
+        continue  # <--- Skip all OCR
+
+    else:
+        if len(raw_native_text.strip()) > 50:
+            print(f"   >>> [Gatekeeper] Bogus digital layer detected (Score: {native_score:.2f} -> {native_status}).")
+            attempt_fast_lane = True
+        else:
+            print("   >>> [Gatekeeper] No digital text found. Skipping Fast Lane -> FORCING Robust Pipeline.")
+            attempt_fast_lane = False
+
+    # --- TIER 2: FAST LANE OCR ---
+    if attempt_fast_lane:
+        print("   >>> Attempting Tier 2: Fast Lane Visual OCR...")
+
         fast_skew, fast_debug_img = get_skew_angle(img_gray)
 
         if abs(fast_skew) > 0.5:
@@ -453,55 +616,51 @@ for page_num, page in enumerate(doc):
         else:
             skew_summary.append((page_num + 1, 0.0, "Fast Lane"))
 
-        # 2. NOISE CORRECTION (Fast Lane)
         if is_page_dirty(img_gray):
             print("   >>> [Fast Lane] Noise detected. Applying NL Means Denoising...")
             img_bgr = clean_digital_noise(img_bgr)
 
-        # --- PROCEED TO OCR (WITH CONFIDENCE CHECK) ---
         try:
-            # Get detailed data (Conf) AND string text
             data_fast = pt.image_to_data(img_bgr, config='--psm 3', output_type=pt.Output.DICT)
             raw_fast = pt.image_to_string(img_bgr, config='--psm 3')
             fast_text = basic_text_cleanup(raw_fast)
 
-            # Calculate Average Confidence (Ignore empty blocks marked '-1')
             confs = [int(c) for c in data_fast['conf'] if c != '-1']
             avg_conf = sum(confs) / len(confs) if confs else 0
             print(f"   >>> [Fast Lane] Confidence: {avg_conf:.2f}%")
-
         except Exception as e:
             print(f"   >>> [Fast Lane] OCR Error: {e}")
             fast_text = ""
             avg_conf = 0
 
-        # SUCCESS CHECK: Must be Valid Text AND > 50% Confident
         if len(fast_text.strip()) > 50 and not is_garbage_text(fast_text) and avg_conf > 50:
             print("   >>> SUCCESS: Fast Lane OCR extracted text.")
 
-            # --- ROUTING LOGIC FOR FAST LANE (Passes avg_conf) ---
-            page_text_to_add = f"--- PAGE {page_num + 1} (FAST LANE) ---\n\n{fast_text}\n" + "=" * 50 + "\n"
+            page_text_to_add = f"--- PAGE {page_num + 1} (TIER 2: FAST LANE) ---\n\n{fast_text}\n" + "=" * 50 + "\n"
             score, status = get_page_quality_score(page_text_to_add, avg_conf)
             print(f"   >>> [Quality Gate] Score: {score:.2f} -> {status}")
 
-            if "GARBAGE" in status:
-                pages_for_dots_ocr.append(page_num + 1)
+            if "GARBAGE" not in status:
+                # Write output immediately to disk for this page
+                with open(page_md_path, "w", encoding="utf-8") as f:
+                    f.write(page_text_to_add)
 
-            full_document_text += page_text_to_add
+                cv2.rectangle(img_bgr, (0, 0), (img_bgr.shape[1], 80), (0, 200, 0), -1)
+                cv2.putText(img_bgr, "TIER 2: FAST LANE OCR", (40, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 0), 3)
+                debug_images_list.append(Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)))
 
-            cv2.rectangle(img_bgr, (0, 0), (img_bgr.shape[1], 80), (0, 200, 0), -1)
-            cv2.putText(img_bgr, "FAST LANE: VISUAL OCR", (40, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 0), 3)
-            debug_images_list.append(Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)))
-
-            fast_lane_success = True
-            continue  # <--- Skip Robust Lane
+                continue  # <--- Skip Robust Lane
+            else:
+                print(f"   >>> Fast Lane Quality Gate Failed: {status}. FALLING THROUGH to Robust Lane...")
+                if skew_summary and skew_summary[-1][0] == page_num + 1:
+                    skew_summary.pop()
         else:
             print(f"   >>> Fast Lane failed (Conf: {avg_conf:.2f}% or Garbage). FALLING THROUGH to Robust Lane...")
+            if skew_summary and skew_summary[-1][0] == page_num + 1:
+                skew_summary.pop()
 
-    else:
-        print("   >>> No Digital Layer found. FORCING Robust Pipeline.")
-
-    # --- ROBUST PIPELINE ---
+    # --- TIER 3: ROBUST PIPELINE ---
+    print("   >>> FORCING Tier 3: Robust Pipeline.")
 
     # 1. Orientation Fix
     img_gray = fix_orientation(img_gray)
@@ -529,40 +688,32 @@ for page_num, page in enumerate(doc):
     # 4. PROCESSING LOGIC (CLEAN vs DIRTY)
     is_dirty = is_page_dirty(img_gray)
 
-    # Initialize variables to avoid scope errors
     is_clean_mode = False
     clean_text_psm3 = ""
     clean_conf_psm3 = 0.0
-    data_psm3 = None  # Initialized to None for safety
+    data_psm3 = None
 
     if is_dirty:
-        print("      [Robust] Mode: DIRTY -> Using Dual Pipeline (Aggressive Layout / Gentle OCR)")
+        print("      [Robust] Mode: DIRTY -> Using Dual Pipeline")
 
-        img_gray = cv2.GaussianBlur(img_gray, (5, 5), 0)  # anti-dithering fix
-        # A. LAYOUT PATH (Aggressive: 7, 55, 55)
+        img_gray = cv2.GaussianBlur(img_gray, (5, 5), 0)
         blur_layout = cv2.bilateralFilter(img_gray, 7, 55, 55)
         thresh_layout_base = cv2.adaptiveThreshold(blur_layout, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,
                                                    15, 15)
         thresh_layout = clean_heavy_grain(thresh_layout_base, min_area=50)
 
-        # B. OCR PATH (Gentle: 5, 25, 25)
         blur_ocr = cv2.bilateralFilter(img_gray, 5, 25, 25)
-        thresh_ocr = cv2.adaptiveThreshold(blur_ocr, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 15)
+        thresh_ocr = cv2.adaptiveThreshold(blur_ocr, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 12)
         healed_ocr_img = cv2.erode(thresh_ocr, np.ones((2, 2), np.uint8), iterations=1)
 
     else:
-        # --- MODIFIED: DECOUPLED CLEAN PIPELINE ---
-        print("      [Robust] Mode: CLEAN -> Decoupled Pipeline (Otsu Layout / NL Means OCR)")
+        print("      [Robust] Mode: CLEAN -> Decoupled Pipeline")
         is_clean_mode = True
 
-        # 1. LAYOUT PATH (Fast Otsu for Geometry)
         gray_blur = cv2.GaussianBlur(img_gray, (3, 3), 0)
         thresh_layout = cv2.threshold(gray_blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
 
-        # 2. OCR PATH (NL Means for Reading)
-        # Keeps the image in grayscale and perfectly preserves thin letter strokes
         healed_ocr_img = cv2.fastNlMeansDenoising(img_gray, None, h=10, templateWindowSize=7, searchWindowSize=21)
-        # ------------------------------------------
 
     # 5. Sync Crop
     h, w = healed_ocr_img.shape
@@ -578,20 +729,18 @@ for page_num, page in enumerate(doc):
         healed_ocr_img = healed_ocr_img[y1:y2, x1:x2]
         thresh_layout = thresh_layout[y1:y2, x1:x2]
 
-    # --- NEW: OPTIONAL PSM3 PATH FOR CLEAN MODE ---
     if is_clean_mode:
         print("      [Robust Clean] Running Parallel OCR (PSM 3)...")
         try:
-            # Run PSM 3 on the whole cropped image
             data_psm3 = pt.image_to_data(healed_ocr_img, config="--psm 3", output_type=pt.Output.DICT)
             raw_psm3 = pt.image_to_string(healed_ocr_img, config="--psm 3")
-            clean_text_psm3 = basic_text_cleanup(raw_psm3)  # <--- CLEANUP INSERTED
+            clean_text_psm3 = basic_text_cleanup(raw_psm3)
             clean_conf_psm3 = get_ocr_confidence(data_psm3)
             print(f"      [Robust Clean] PSM 3 Confidence: {clean_conf_psm3:.2f}")
         except:
             clean_conf_psm3 = 0.0
 
-    # 6. Layout Analysis (Default Path A)
+    # 6. Layout Analysis
     edges = cv2.Canny(thresh_layout, 50, 150)
     layout_map = cv2.bitwise_not(cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=1))
     blocks = get_sorted_text_blocks(layout_map, min_w_pixels, min_h_pixels, DPI)
@@ -603,128 +752,87 @@ for page_num, page in enumerate(doc):
     # 7. Extraction & Confidence Comparison
     vis_image_bgr = cv2.cvtColor(healed_ocr_img, cv2.COLOR_GRAY2BGR)
 
-    # Collect text and confidence for Path A (Layout Analysis)
     layout_text_full = ""
     layout_conf_sum = 0
     layout_conf_count = 0
     block_results = []
 
-    manual_block_count = len(blocks)  # Keep this for the "Fragmentation" check (speed)
-    valid_green_blocks = 0  # <--- NEW: Count only valid text for "Structure" check
+    manual_block_count = len(blocks)
+    valid_green_blocks = 0
     forced_psm3 = False
 
-    # --- UPDATED: INSTANT SWITCH LOGIC ---
-    # If raw blocks > 50 in Clean Mode, skip Manual OCR completely (Speed optimization)
     if is_clean_mode and manual_block_count > 50:
         print(
             f"      [Robust Clean] Manual Layout Fragmented ({manual_block_count} blocks > 50). Instantly switching to PSM 3.")
         forced_psm3 = True
     else:
-        # Run Manual OCR Loop (only if not forced to skip)
         for i, (x, y, w, h) in enumerate(blocks):
             roi = healed_ocr_img[y:y + h, x:x + w]
             if is_dense_graphic(roi):
                 block_results.append((i, x, y, w, h, "image", "", 0))
                 continue
 
-            # --- OPTIMIZED: TESSERACT EXCEPTION HANDLING ---
             try:
-                # 1. Ensure the ROI is valid before sending to Tesseract
                 if roi.size == 0 or roi.shape[0] == 0 or roi.shape[1] == 0:
-                    text_box = ""
-                    conf_box = 0
+                    text_box, conf_box = "", 0
                     continue
 
-                # 2. Extract the text
                 data_box = pt.image_to_data(roi, config="--oem 3 --psm 6", output_type=pt.Output.DICT)
                 raw_box = pt.image_to_string(roi, config="--oem 3 --psm 6")
 
-                # 3. Clean and verify
                 text_box = basic_text_cleanup(raw_box)
                 conf_box = get_ocr_confidence(data_box)
-
             except Exception as e:
-                # 4. PRINT THE ERROR so we aren't flying blind!
                 print(f"      [!] Tesseract Error on block {i}: {e}")
-                text_box = ""
-                conf_box = 0
-            # ------------------------------------------------
+                text_box, conf_box = "", 0
 
             if is_garbage_text(text_box):
                 block_results.append((i, x, y, w, h, "diagram", "", 0))
-                # Note: We do NOT increment valid_green_blocks here
             else:
                 block_results.append((i, x, y, w, h, "text", text_box, conf_box))
                 layout_text_full += text_box + "\n\n"
                 layout_conf_sum += conf_box
                 layout_conf_count += 1
-                valid_green_blocks += 1  # <--- NEW: Only count GREEN boxes
+                valid_green_blocks += 1
 
-    # Calculate Average Confidence for Layout Path
     layout_avg_conf = (layout_conf_sum / layout_conf_count) if layout_conf_count > 0 else 0.0
 
     if is_clean_mode:
         print(
             f"      [Robust Clean] Comparison -> PSM 3 Conf: {clean_conf_psm3:.2f} vs Layout Conf: {layout_avg_conf:.2f}")
 
-    # DECISION: SWITCH TO PSM 3?
     use_psm3 = False
     reason = ""
 
-    # Only run logic if Clean Mode (prevents Dirty Mode access to PSM3 data)
     if is_clean_mode:
         try:
-            if data_psm3:
-                psm3_block_count = len(set(data_psm3['block_num']))
-            else:
-                psm3_block_count = 1
+            psm3_block_count = len(set(data_psm3['block_num'])) if data_psm3 else 1
         except:
             psm3_block_count = 1
 
-        # UPDATED PRINT: Shows Valid Green Blocks vs PSM3
         print(
             f"      [Robust Clean] Structure -> Valid Green Blocks: {valid_green_blocks} (Raw: {manual_block_count}) | PSM 3 Blocks: {psm3_block_count}")
 
-        # Condition 0: Forced Fragmentation (Immediate Switch)
         if forced_psm3:
-            use_psm3 = True
-            reason = f"Manual Layout Fragmented (>50 blocks)"
-
-        # Condition 1: Confidence dominance (Existing)
+            use_psm3, reason = True, "Manual Layout Fragmented (>50 blocks)"
         elif clean_conf_psm3 > (layout_avg_conf + 8):
-            use_psm3 = True
-            reason = f"Higher Confidence (+8)"
-
-        # Condition 2: Structural Superiority (UPDATED)
-        # Check uses valid_green_blocks now. If we have 1 green block + 10 orange blocks,
-        # valid_green_blocks is 1. Since 1 <= 3, we enter this check.
+            use_psm3, reason = True, "Higher Confidence (+8)"
         elif valid_green_blocks <= 3 and psm3_block_count > min(valid_green_blocks, 3):
             if clean_conf_psm3 > 50:
-                use_psm3 = True
-                reason = "Better Layout Detection (Multi-block vs Single)"
-
-        # Condition 3: Garbage Dominance (NEW IMPLICIT REQUEST)
-        # If we found mostly garbage (e.g. 20 blocks total, but only 1 was green), trust PSM3
+                use_psm3, reason = True, "Better Layout Detection (Multi-block vs Single)"
         elif manual_block_count > 5 and valid_green_blocks < 2:
             if clean_conf_psm3 > 60:
-                use_psm3 = True
-                reason = "Manual Layout mostly garbage/noise"
+                use_psm3, reason = True, "Manual Layout mostly garbage/noise"
 
-    # --- APPLY DECISION ---
     if use_psm3:
         print(f"      [Robust Clean] SWITCHING to PSM 3 Output. Reason: {reason}")
-        final_page_text = f"--- PAGE {page_num + 1} (ROBUST CLEAN - PSM 3) ---\n\n{clean_text_psm3}\n" + "=" * 50 + "\n"
-
+        final_page_text = f"--- PAGE {page_num + 1} (TIER 3: ROBUST CLEAN - PSM 3) ---\n\n{clean_text_psm3}\n" + "=" * 50 + "\n"
         cv2.rectangle(vis_image_bgr, (0, 0), (vis_image_bgr.shape[1], 50), (0, 255, 0), -1)
-        cv2.putText(vis_image_bgr, f"SELECTED: PSM 3 ({reason})", (20, 35),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
-
+        cv2.putText(vis_image_bgr, f"SELECTED: PSM 3 ({reason})", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
     else:
-        # Stick to Manual Layout (Default)
-        if is_clean_mode:
-            print("      [Robust Clean] Keeping Manual Layout Output.")
+        if is_clean_mode: print("      [Robust Clean] Keeping Manual Layout Output.")
+        final_page_text = f"--- PAGE {page_num + 1} (TIER 3: ROBUST PIPELINE) ---\n\n"
 
-        final_page_text = f"--- PAGE {page_num + 1} (ROBUST PIPELINE) ---\n\n"
         for idx, x, y, w, h, b_type, text, conf in block_results:
             if b_type == "image":
                 final_page_text += f"[IMAGE {idx}]\n\n"
@@ -736,18 +844,20 @@ for page_num, page in enumerate(doc):
                 final_page_text += text + "\n\n"
                 cv2.rectangle(vis_image_bgr, (x, y), (x + w, y + h), (0, 255, 0), 3)
                 cv2.putText(vis_image_bgr, str(idx), (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-
         final_page_text += "=" * 50 + "\n"
 
-    # --- ROUTING LOGIC FOR ROBUST LANE (Calculates Final Conf) ---
     final_page_conf = clean_conf_psm3 if use_psm3 else layout_avg_conf
     score, status = get_page_quality_score(final_page_text, final_page_conf)
     print(f"   >>> [Quality Gate] Score: {score:.2f} -> {status}")
 
+    # Write robust output immediately to disk for this page regardless of gate
+    # (LightOn will easily overwrite it later if it ends up in the fail list)
+    with open(page_md_path, "w", encoding="utf-8") as f:
+        f.write(final_page_text)
+
     if "GARBAGE" in status:
         pages_for_dots_ocr.append(page_num + 1)
 
-    full_document_text += final_page_text
     debug_images_list.append(Image.fromarray(cv2.cvtColor(vis_image_bgr, cv2.COLOR_BGR2RGB)))
 
 # --- SKEW SUMMARY PRINT ---
@@ -760,41 +870,34 @@ for p_num, angle, action in skew_summary:
     print(f"{p_num:<10} | {angle:<15.2f} | {action}")
 print("=" * 50)
 
-# --- SAVE OUTPUTS ---
-with open(OUTPUT_TEXT_NAME, "w", encoding="utf-8") as f:
-    f.write(full_document_text)
-print(f"\n>>> Saved text to: {OUTPUT_TEXT_NAME}")
-
-# --- NEW: ROUTING SUMMARY REPORT ---
+# --- ROUTING SUMMARY REPORT ---
 print("\n" + "=" * 50)
 print("             EXTRACTION SUMMARY")
 print("=" * 50)
 print(f"Total Pages Processed: {len(doc)}")
-print(f"Successful Manual Extractions: {len(doc) - len(pages_for_dots_ocr)}")
-print(f"Pages Routed to AI (dots.ocr): {len(pages_for_dots_ocr)}")
+print(f"Successful Extractions (Tiers 1-3): {len(doc) - len(pages_for_dots_ocr)}")
+print(f"Pages Routed to AI Fallback (dots.ocr): {len(pages_for_dots_ocr)}")
 
+# Retained the pages_for_dots_ocr output logic
 if pages_for_dots_ocr:
-    print("\n[!] The following pages failed the quality check and need dots.ocr:")
+    print("\n[!] The following pages failed the quality check and need fallback parsing:")
     print(f"    Pages: {pages_for_dots_ocr}")
     with open("pages_for_dots.txt", "w") as f:
         f.write(",".join(map(str, pages_for_dots_ocr)))
     print("    (Saved list to 'pages_for_dots.txt')")
 else:
-    # --- MODIFIED: CLEAR FILE IF NO PAGES FAILED ---
-    print("\n[+] All pages passed the quality check! No pages routed to dots.ocr.")
+    print("\n[+] All pages passed the quality check! No pages routed to fallback.")
     with open("pages_for_dots.txt", "w") as f:
-        f.write("") # Clear the file so previous runs don't interfere
+        f.write("")
     print("    (Cleared 'pages_for_dots.txt')")
 print("=" * 50)
 
-# Save Layout Analysis PDF
 if debug_images_list:
     debug_images_list[0].save(
         OUTPUT_PDF_NAME, "PDF", resolution=100.0, save_all=True, append_images=debug_images_list[1:]
     )
     print(f">>> Saved visual debug PDF to: {OUTPUT_PDF_NAME}")
 
-# Save SKEW PDF
 if debug_skew_list:
     debug_skew_list[0].save(
         OUTPUT_SKEW_PDF_NAME, "PDF", resolution=100.0, save_all=True, append_images=debug_skew_list[1:]

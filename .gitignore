@@ -1,9 +1,26 @@
+# --- Python & Environments ---
 __pycache__/
 *.pyc
-.idea/
-.vscode/
 venv/
 venv311/
-extracted_output.txt
-debug_visuals.pdf
+dots_env/
+
+# --- IDEs & Editors ---
+.idea/
+.vscode/
+
+# --- AI Model Weights (CRITICAL TO IGNORE) ---
+weights/
+
+# --- Pipeline Outputs & Temp Folders ---
+output/
+temp_images/
+temp_dots_images/
+
+# --- Generated Documents & Logs ---
 *.pdf
+*.json
+*.txt
+
+# --- EXCEPTIONS (Files we DO want to upload) ---
+!indian_legal_vocab.txt

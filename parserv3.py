@@ -41,20 +41,19 @@ scale_factor = (DPI / 300) ** 2
 def basic_text_cleanup(text):
     """
     Safer cleanup that preserves list markers (1., A.) and technical text.
-    Uses 'Do No Harm' hyphenation to protect proper nouns and legal/tech jargon.
+    Removes Tesseract noise like hyphenation issues and orphaned punctuation.
     """
     if not text:
         return ""
 
-    # 1. THE FIX: Do No Harm Hyphenation
-    # "cross-\nexamination" -> "cross- examination"
-    # "ISO-\n9001" -> "ISO- 9001"
-    text = re.sub(r'-\s*\n\s*', '- ', text)
+    # 1. Fix Hyphenation: Join words split by hyphen+newline (Safe)
+    # "process-\ning" -> "processing"
+    text = re.sub(r'(\w+)-\s*\n\s*(\w+)', r'\1\2', text)
 
-    # 2. Remove pipes | often read from table borders
+    # 2. Remove pipes | often read from table borders (Safe for text)
     text = text.replace('|', ' ')
 
-    # 3. Collapse whitespace
+    # 3. Collapse whitespace (Safe)
     text = re.sub(r'[ \t]+', ' ', text)
 
     # 4. Safer Line Filtering
@@ -64,6 +63,7 @@ def basic_text_cleanup(text):
         stripped = line.strip()
 
         # LOGIC: Only delete the line if it is short AND has NO letters/numbers.
+        # This preserves "1." or "A." but kills ".." or "--" or "__"
         if len(stripped) < 4 and not any(c.isalnum() for c in stripped):
             continue
 
@@ -71,7 +71,7 @@ def basic_text_cleanup(text):
 
     text = "\n".join(clean_lines)
 
-    # 5. Limit newlines
+    # 5. Limit newlines (Safe)
     text = re.sub(r'\n{3,}', '\n\n', text)
 
     return text.strip()
@@ -134,10 +134,6 @@ def get_page_quality_score(page_text, page_conf):
     if word_count < 10:
         return 999.0, "GARBAGE (No Text Extracted)"
 
-    # THE NEW TRAP: Catches severe drop-outs and routes Cover Pages to dots.ocr
-    elif word_count < 45:
-        return 999.0, f"GARBAGE (Sparse Text: {word_count} words - Likely Cover Page or Bad Extraction)"
-
     if legal_tokenizer:
         tokens = legal_tokenizer.encode(clean_text, add_special_tokens=False)
         ratio = len(tokens) / word_count
@@ -184,71 +180,36 @@ def get_skew_angle(image):
     """
     img_copy = image.copy()
     if len(img_copy.shape) == 3:
-        gray = cv2.cvtColor(img_copy, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = img_copy
+        img_copy = cv2.cvtColor(img_copy, cv2.COLOR_BGR2GRAY)
 
-    edges = cv2.Canny(gray, 50, 150)
+    edges = cv2.Canny(img_copy, 50, 150)
     lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=100, maxLineGap=10)
 
     # Prepare Debug Image
     debug_vis = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
 
+    if lines is None:
+        return 0.0, debug_vis
+
     angles = []
-    if lines is not None:
-        for l in lines:
-            x1, y1, x2, y2 = l[0]
-            angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+    for l in lines:
+        x1, y1, x2, y2 = l[0]
+        angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
 
-            if -45 < angle < 45:
-                angles.append(angle)
-                cv2.line(debug_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)  # Green
-            else:
-                cv2.line(debug_vis, (x1, y1), (x2, y2), (0, 0, 255), 2)  # Red
+        if -45 < angle < 45:
+            angles.append(angle)
+            cv2.line(debug_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)  # Green
+        else:
+            cv2.line(debug_vis, (x1, y1), (x2, y2), (0, 0, 255), 2)  # Red
 
-    # --- THE UPGRADE: PROJECTION PROFILE FALLBACK ---
     num_lines = len(angles)
-    if num_lines < 10 or (num_lines >= 10 and np.std(angles) > 2.5):
-        print("      [Skew] HoughLines insufficient/noisy. Triggering Projection Profile Fallback...")
+    if num_lines < 10:
+        return 0.0, debug_vis
 
-        # Invert to white text on black background for accurate pixel summation
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    std_dev = np.std(angles)
+    if std_dev > 2.5:
+        return 0.0, debug_vis
 
-        h, w = binary.shape
-        center = (w // 2, h // 2)
-
-        def get_variance(angle):
-            # INTER_NEAREST is faster for binary images during sweeps
-            M = cv2.getRotationMatrix2D(center, angle, 1.0)
-            rotated = cv2.warpAffine(binary, M, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT,
-                                     borderValue=0)
-            projection = np.sum(rotated, axis=1)
-            return np.var(projection)
-
-        # 1. Coarse Sweep: -5.0 to +5.0 degrees (1 degree steps)
-        best_coarse_angle = 0.0
-        max_var = 0.0
-        for angle in np.arange(-5.0, 6.0, 1.0):
-            variance = get_variance(angle)
-            if variance > max_var:
-                max_var = variance
-                best_coarse_angle = angle
-
-        # 2. Fine Sweep: Zoom in around the best coarse angle (0.1 degree steps)
-        best_final_angle = best_coarse_angle
-        for angle in np.arange(best_coarse_angle - 1.0, best_coarse_angle + 1.1, 0.1):
-            variance = get_variance(angle)
-            if variance > max_var:
-                max_var = variance
-                best_final_angle = angle
-
-        # Visual indicator that the fallback was triggered
-        cv2.putText(debug_vis, f"Fallback Skew: {best_final_angle:.2f}", (30, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 100, 100), 2)
-
-        return best_final_angle, debug_vis
-
-    # If Hough Lines was successful and tight, use it (Fast Path)
     return np.median(angles), debug_vis
 
 
@@ -551,18 +512,16 @@ for page_num, page in enumerate(doc):
         healed_ocr_img = cv2.erode(thresh_ocr, np.ones((2, 2), np.uint8), iterations=1)
 
     else:
-        # --- MODIFIED: DECOUPLED CLEAN PIPELINE ---
-        print("      [Robust] Mode: CLEAN -> Decoupled Pipeline (Otsu Layout / NL Means OCR)")
+        print("      [Robust] Mode: CLEAN -> Using Standard Gaussian Pipeline")
         is_clean_mode = True
 
-        # 1. LAYOUT PATH (Fast Otsu for Geometry)
+        # --- LOGIC FROM SECOND CODE ---
+        # Uses Standard Gaussian Blur (3,3) -> OTSU
         gray_blur = cv2.GaussianBlur(img_gray, (3, 3), 0)
-        thresh_layout = cv2.threshold(gray_blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+        thresh_gentle = cv2.threshold(gray_blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
 
-        # 2. OCR PATH (NL Means for Reading)
-        # Keeps the image in grayscale and perfectly preserves thin letter strokes
-        healed_ocr_img = cv2.fastNlMeansDenoising(img_gray, None, h=10, templateWindowSize=7, searchWindowSize=21)
-        # ------------------------------------------
+        thresh_layout = thresh_gentle
+        healed_ocr_img = thresh_gentle
 
     # 5. Sync Crop
     h, w = healed_ocr_img.shape
